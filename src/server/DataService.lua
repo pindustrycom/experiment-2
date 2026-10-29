@@ -2,6 +2,7 @@
 -- when DataStores are unavailable (e.g. unpublished place in Studio).
 local DataStoreService = game:GetService("DataStoreService")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
@@ -151,6 +152,9 @@ function DataService.Load(player)
 		end
 	end
 	data = reconcile(data or DataService.Default())
+	if Config.StudioTestCash and RunService:IsStudio() then
+		data.cash = math.max(data.cash, Config.StudioTestCash)
+	end
 	DataService.Profiles[player] = data
 	return data
 end
@@ -159,6 +163,9 @@ function DataService.Save(player)
 	local data = DataService.Profiles[player]
 	if not data or not store then
 		return
+	end
+	if Config.StudioTestCash and RunService:IsStudio() then
+		return -- don't write test cash into the real save
 	end
 	data.lastOnline = os.time()
 	local ok, err = pcall(function()

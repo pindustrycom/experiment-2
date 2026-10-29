@@ -22,11 +22,12 @@
     "Lighting": {
       "$properties": {
         "ClockTime": 15.2,
-        "Brightness": 2.2,
+        "Brightness": 1.6,
+        "ExposureCompensation": -0.3,
         "GlobalShadows": true,
         "Technology": "Future",
-        "EnvironmentDiffuseScale": 1,
-        "EnvironmentSpecularScale": 1
+        "EnvironmentDiffuseScale": 0.6,
+        "EnvironmentSpecularScale": 0.6
       }
     }
   }

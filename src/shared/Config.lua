@@ -3,6 +3,9 @@ local Config = {}
 
 Config.GameName = "Boarding School Tycoon"
 Config.StartingCash = 300
+-- Testing: in Studio only, start every session with this much cash and skip saving.
+-- Set to nil (or false) before release to test the real economy in Studio.
+Config.StudioTestCash = 1e12
 Config.MaxStudents = 180 -- roster cap (housed + unhoused), must be >= total beds
 Config.SaveKey = "BST_Player_v1"
 

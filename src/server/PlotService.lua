@@ -184,11 +184,12 @@ local ALONG_Z = CFrame.Angles(0, -math.pi / 2, 0)
 local function setupLighting()
 	local Lighting = game:GetService("Lighting")
 	Lighting.ClockTime = 15.2
-	Lighting.Brightness = 2.2
-	Lighting.Ambient = Color3.fromRGB(70, 70, 80)
-	Lighting.OutdoorAmbient = Color3.fromRGB(135, 135, 150)
-	Lighting.EnvironmentDiffuseScale = 1
-	Lighting.EnvironmentSpecularScale = 1
+	Lighting.Brightness = 1.6
+	Lighting.ExposureCompensation = -0.3
+	Lighting.Ambient = Color3.fromRGB(40, 40, 48)
+	Lighting.OutdoorAmbient = Color3.fromRGB(105, 105, 118)
+	Lighting.EnvironmentDiffuseScale = 0.6
+	Lighting.EnvironmentSpecularScale = 0.6
 	Lighting.GlobalShadows = true
 	Lighting.ShadowSoftness = 0.25
 	local function effect(class, props)
@@ -198,10 +199,10 @@ local function setupLighting()
 		end
 		e.Parent = Lighting
 	end
-	effect("Atmosphere", { Density = 0.3, Offset = 0.25, Color = Color3.fromRGB(200, 215, 235), Decay = Color3.fromRGB(110, 120, 140), Glare = 0.4, Haze = 1.2 })
-	effect("BloomEffect", { Intensity = 0.6, Size = 28, Threshold = 1.6 })
-	effect("SunRaysEffect", { Intensity = 0.06, Spread = 0.8 })
-	effect("ColorCorrectionEffect", { Brightness = 0.02, Contrast = 0.08, Saturation = 0.12, TintColor = Color3.fromRGB(255, 248, 240) })
+	effect("Atmosphere", { Density = 0.3, Offset = 0.25, Color = Color3.fromRGB(200, 215, 235), Decay = Color3.fromRGB(110, 120, 140), Glare = 0.1, Haze = 0.8 })
+	effect("BloomEffect", { Intensity = 0.25, Size = 20, Threshold = 2.4 })
+	effect("SunRaysEffect", { Intensity = 0.03, Spread = 0.6 })
+	effect("ColorCorrectionEffect", { Brightness = -0.04, Contrast = 0.1, Saturation = 0.12, TintColor = Color3.fromRGB(255, 248, 240) })
 end
 
 local function buildPlazaDecor(world)
@@ -237,7 +238,7 @@ local function buildPlazaDecor(world)
 		local globe = part({ Name = "LampGlobe", Shape = Enum.PartType.Ball, Size = Vector3.new(1.4, 1.4, 1.4), CFrame = CFrame.new(lp + Vector3.new(0, 10.9, 0)), Color = Color3.fromRGB(255, 235, 190), Material = Enum.Material.Neon, Parent = world })
 		local l = Instance.new("PointLight")
 		l.Range = 20
-		l.Brightness = 1
+		l.Brightness = 0.55
 		l.Color = Color3.fromRGB(255, 220, 170)
 		l.Parent = globe
 	end
@@ -542,7 +543,7 @@ local function finishStudent(m, uid, student, head, root)
 		local light = Instance.new("PointLight")
 		light.Color = rarity.color
 		light.Range = 10
-		light.Brightness = 2
+		light.Brightness = 1.1
 		light.Parent = root
 		local aura = Instance.new("ParticleEmitter")
 		aura.Color = ColorSequence.new(rarity.color)
@@ -740,7 +741,7 @@ end
 local function light(p, range, color)
 	local l = Instance.new("PointLight")
 	l.Range = range or 14
-	l.Brightness = 1.2
+	l.Brightness = 0.66
 	l.Color = color or Color3.fromRGB(255, 235, 200)
 	l.Parent = p
 end
@@ -1099,10 +1100,10 @@ local function buildShell(m, rcf, row, side, size, wallStyle, floorStyle, hallSt
 	end
 
 	-- ceiling light
-	local fixture = part({ Name = "CeilingLight", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 2.2, 2.2), CFrame = rcf * CFrame.new(ROOM_U / 2, WALL_H - 0.15, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(255, 244, 220), Material = Enum.Material.Neon, CanCollide = false, Parent = m })
+	local fixture = part({ Name = "CeilingLight", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 2.2, 2.2), CFrame = rcf * CFrame.new(ROOM_U / 2, WALL_H - 0.15, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(215, 205, 185), Material = Enum.Material.Neon, CanCollide = false, Parent = m })
 	local l = Instance.new("PointLight")
 	l.Range = 20
-	l.Brightness = opts.bright and 1.4 or 0.9
+	l.Brightness = opts.bright and 0.8 or 0.5
 	l.Color = Color3.fromRGB(255, 225, 180)
 	l.Shadows = false
 	l.Parent = fixture
@@ -1186,7 +1187,7 @@ local function renderStructure(plot, data)
 				if (r + (sd == 1 and 1 or 0)) % 2 == 0 then
 					local l = Instance.new("PointLight")
 					l.Range = 16
-					l.Brightness = 0.8
+					l.Brightness = 0.44
 					l.Color = Color3.fromRGB(255, 220, 170)
 					l.Shadows = false
 					l.Parent = bulb
@@ -1319,7 +1320,7 @@ local function renderStructure(plot, data)
 		block(g, "LanternCap", Vector3.new(0.8, 0.2, 0.8), sd * 4.3, floorY(0) + 6.55, HOUSE_Z0 - 0.9, { Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal })
 		local l = Instance.new("PointLight")
 		l.Range = 14
-		l.Brightness = 1
+		l.Brightness = 0.55
 		l.Color = Color3.fromRGB(255, 210, 150)
 		l.Parent = lantern
 	end
