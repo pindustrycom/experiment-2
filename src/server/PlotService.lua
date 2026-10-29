@@ -1603,8 +1603,10 @@ local function buildBoards(plot, parent, info, data, totals)
 		pp:SetAttribute("OwnerUserId", plot.owner.UserId)
 		pp:SetAttribute("Board", b.id)
 		CollectionService:AddTag(pp, "BoardPrompt")
-		-- pin
-		part({ Name = "Pin", Shape = Enum.PartType.Ball, Size = Vector3.new(0.4, 0.4, 0.4), CFrame = rcf * CFrame.new(ROOM_U - 0.8, 6.4 + BOARD_H / 2 - 0.3, b.v), Color = Color3.fromRGB(220, 40, 40), CanCollide = false, Parent = parent })
+		-- pins in the top corners, clear of the title
+		for _, dv in ipairs({ -1, 1 }) do
+			part({ Name = "Pin", Shape = Enum.PartType.Ball, Size = Vector3.new(0.35, 0.35, 0.35), CFrame = rcf * CFrame.new(ROOM_U - 0.8, 6.4 + BOARD_H / 2 - 0.25, b.v + dv * (BOARD_W / 2 - 0.25)), Color = Color3.fromRGB(220, 40, 40), CanCollide = false, Parent = parent })
+		end
 	end
 end
 
