@@ -535,10 +535,21 @@ local function weldTo(base, p)
 	return p
 end
 
+-- default accessories per outfit look (Config.Looks); a student's own `acc` list replaces them
+local LOOK_ACC = {
+	Royal = { "crown" },
+	Nerd = { "glasses" },
+	Musician = { "guitar" },
+	Jock = { "cap" },
+	Gamer = { "headset" },
+	Artist = { "beret" },
+	Rebel = { "shades", "jacket" },
+	Prankster = { "propeller" },
+}
+
 local function finishStudent(m, uid, student, head, root)
 	local def = Config.StudentById[student.id]
 	local rarity = Config.Rarities[def.rarity]
-	local pers = Config.Personalities[def.personality]
 	if rarity.rank >= 5 then
 		local light = Instance.new("PointLight")
 		light.Color = rarity.color
@@ -561,8 +572,8 @@ local function finishStudent(m, uid, student, head, root)
 		sp.Parent = head
 	end
 	local bb = billboard(head, UDim2.fromOffset(160, 44), Vector3.new(0, 2.2, 0), 60)
-	label(bb, (student.shiny and "✨" or "") .. def.name, Color3.new(1, 1, 1), UDim2.fromScale(1, 0.55))
-	local r = label(bb, pers.emoji .. " " .. def.rarity, rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
+	label(bb, (student.shiny and "✨" or "") .. (def.crew and "🌹 " or "") .. def.name, def.crew and Config.Tags.LaRose.color or Color3.new(1, 1, 1), UDim2.fromScale(1, 0.55))
+	local r = label(bb, Config.TagEmoji(def) .. " " .. def.rarity, rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
 	r.Name = "RarityLabel"
 	m:SetAttribute("StudentUid", uid)
 	CollectionService:AddTag(m, "Student")
@@ -571,10 +582,10 @@ end
 
 local function buildAvatarStudent(template, uid, student, cf, skin, seed)
 	local def = Config.StudentById[student.id]
-	local pers = Config.Personalities[def.personality]
 	local m = template:Clone()
 	m.Name = def.name
-	local shirt = pers.color
+	skin = def.skin or skin
+	local shirt = def.shirt or Config.Looks[def.look].color
 	local pants = PANTS[(seed % #PANTS) + 1]
 	local shoes = (seed % 3 == 0) and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(30, 30, 35)
 	local colors = {
@@ -596,56 +607,104 @@ local function buildAvatarStudent(template, uid, student, cf, skin, seed)
 	local head = m:FindFirstChild("Head")
 	local torso = m:FindFirstChild("UpperTorso")
 	local hs = head.Size
-	-- hair: a cap over the top and back of the head
-	local hairColor = HAIR[(seed // 3) % #HAIR + 1]
-	local hair = { Name = "Hair", Color = hairColor, Material = Enum.Material.Fabric, Parent = m }
-	hair.Size = Vector3.new(hs.X * 1.08, hs.Y * 0.32, hs.Z * 1.08)
-	hair.CFrame = head.CFrame * CFrame.new(0, hs.Y * 0.4, 0.02)
-	weldTo(head, part(hair))
-	local back = table.clone(hair)
-	back.Size = Vector3.new(hs.X * 1.08, hs.Y * 0.7, hs.Z * 0.2)
-	back.CFrame = head.CFrame * CFrame.new(0, hs.Y * 0.12, hs.Z * 0.48)
-	weldTo(head, part(back))
-	if seed % 2 == 0 then
-		local fringe = table.clone(hair)
-		fringe.Size = Vector3.new(hs.X * 0.9, hs.Y * 0.14, hs.Z * 0.12)
-		fringe.CFrame = head.CFrame * CFrame.new(-hs.X * 0.05, hs.Y * 0.3, -hs.Z * 0.5)
-		weldTo(head, part(fringe))
-	end
-	-- personality accessories
-	local function acc(name, size, offset, color, material, base)
+	local function acc(name, size, offset, color, material, base, shape)
 		base = base or head
-		return weldTo(base, part({ Name = name, Size = size, CFrame = base.CFrame * offset, Color = color, Material = material or Enum.Material.SmoothPlastic, Parent = m }))
+		return weldTo(base, part({ Name = name, Shape = shape, Size = size, CFrame = base.CFrame * offset, Color = color, Material = material or Enum.Material.SmoothPlastic, Parent = m }))
 	end
-	if def.personality == "Royal" then
+	local wear = def.acc or LOOK_ACC[def.look] or {}
+	local has = {}
+	for _, a in ipairs(wear) do
+		has[a] = true
+	end
+	-- hair: a cap over the top and back of the head; girls get it to the shoulders
+	local hairColor = def.hair or HAIR[(seed // 3) % #HAIR + 1]
+	local long = def.gender == "F"
+	local top = has.bighair and 0.6 or 0.32
+	acc("Hair", Vector3.new(hs.X * 1.08, hs.Y * top, hs.Z * 1.08), CFrame.new(0, hs.Y * (0.4 + (top - 0.32) / 2), 0.02), hairColor, Enum.Material.Fabric)
+	local backLen = long and 1.35 or 0.7
+	acc("HairBack", Vector3.new(hs.X * 1.08, hs.Y * backLen, hs.Z * 0.2), CFrame.new(0, hs.Y * (0.47 - backLen / 2), hs.Z * 0.48), hairColor, Enum.Material.Fabric)
+	if long then
+		for _, x in ipairs({ -1, 1 }) do
+			acc("HairSide", Vector3.new(hs.X * 0.14, hs.Y * 1.1, hs.Z * 0.7), CFrame.new(x * hs.X * 0.5, -hs.Y * 0.12, hs.Z * 0.12), hairColor, Enum.Material.Fabric)
+		end
+	end
+	if seed % 2 == 0 or has.bighair then
+		acc("Fringe", Vector3.new(hs.X * 0.9, hs.Y * 0.14, hs.Z * 0.12), CFrame.new(-hs.X * 0.05, hs.Y * 0.3, -hs.Z * 0.5), hairColor, Enum.Material.Fabric)
+	end
+	if has.curly then
+		for i = 0, 7 do
+			local ang = i / 8 * math.pi * 2
+			acc("Curl", Vector3.new(0.45, 0.45, 0.45), CFrame.new(math.cos(ang) * hs.X * 0.45, hs.Y * 0.55, math.sin(ang) * hs.Z * 0.45), hairColor, Enum.Material.Fabric, nil, Enum.PartType.Ball)
+		end
+	end
+	if has.wavy then
+		for _, x in ipairs({ -1, 1 }) do
+			acc("Wave", Vector3.new(hs.X * 0.16, hs.Y * 0.55, hs.Z * 0.8), CFrame.new(x * hs.X * 0.52, hs.Y * 0.2, 0.05) * CFrame.Angles(0, 0, x * 0.15), hairColor, Enum.Material.Fabric)
+		end
+	end
+	if has.crown then
 		acc("Crown", Vector3.new(hs.X * 0.85, 0.35, hs.Z * 0.85), CFrame.new(0, hs.Y * 0.7, 0), Color3.fromRGB(255, 210, 60), Enum.Material.Foil)
 		for i = 0, 3 do
 			acc("CrownPoint", Vector3.new(0.18, 0.3, 0.18), CFrame.new(0, hs.Y * 0.7 + 0.3, 0) * CFrame.Angles(0, i * math.pi / 2, 0) * CFrame.new(0, 0, hs.Z * 0.38), Color3.fromRGB(255, 210, 60), Enum.Material.Foil)
 		end
-	elseif def.personality == "Nerd" then
+	end
+	if has.glasses then
 		for _, x in ipairs({ -0.25, 0.25 }) do
 			acc("Lens", Vector3.new(0.34, 0.3, 0.06), CFrame.new(x * hs.X, hs.Y * 0.08, -hs.Z * 0.53), Color3.fromRGB(200, 230, 255), Enum.Material.Glass).Transparency = 0.4
 		end
 		acc("Bridge", Vector3.new(hs.X * 0.9, 0.06, 0.06), CFrame.new(0, hs.Y * 0.12, -hs.Z * 0.55), Color3.fromRGB(20, 20, 20))
-	elseif def.personality == "Musician" then
+	end
+	if has.guitar then
 		acc("GuitarBody", Vector3.new(1.1, 1.3, 0.3), CFrame.new(0.2, -0.3, torso.Size.Z / 2 + 0.25) * CFrame.Angles(0, 0, 0.5), Color3.fromRGB(180, 60, 40), Enum.Material.Wood, torso)
 		acc("GuitarNeck", Vector3.new(0.18, 1.6, 0.12), CFrame.new(-0.45, 0.75, torso.Size.Z / 2 + 0.25) * CFrame.Angles(0, 0, 0.5), Color3.fromRGB(60, 35, 20), Enum.Material.Wood, torso)
-	elseif def.personality == "Jock" then
+	end
+	if has.cap then
 		acc("Cap", Vector3.new(hs.X * 1.1, 0.35, hs.Z * 1.1), CFrame.new(0, hs.Y * 0.55, 0), Color3.fromRGB(220, 50, 50), Enum.Material.Fabric)
 		acc("Brim", Vector3.new(hs.X * 0.95, 0.08, 0.55), CFrame.new(0, hs.Y * 0.42, -hs.Z * 0.75), Color3.fromRGB(220, 50, 50), Enum.Material.Fabric)
-	elseif def.personality == "Gamer" then
+	end
+	if has.headset then
 		acc("Headset", Vector3.new(hs.X * 1.15, 0.12, 0.3), CFrame.new(0, hs.Y * 0.55, 0), Color3.fromRGB(30, 30, 35))
 		for _, x in ipairs({ -1, 1 }) do
 			acc("Ear", Vector3.new(0.18, 0.5, 0.45), CFrame.new(x * hs.X * 0.56, 0, 0), Color3.fromRGB(40, 220, 200), Enum.Material.Neon)
 		end
-	elseif def.personality == "Artist" then
+		acc("Mic", Vector3.new(0.06, 0.06, 0.5), CFrame.new(-hs.X * 0.5, -hs.Y * 0.2, -hs.Z * 0.3) * CFrame.Angles(0, 0.4, 0), Color3.fromRGB(30, 30, 35))
+	end
+	if has.headphones then
+		acc("Band", Vector3.new(hs.X * 1.2, 0.16, 0.34), CFrame.new(0, hs.Y * 0.62, 0), Color3.fromRGB(240, 240, 240))
+		for _, x in ipairs({ -1, 1 }) do
+			acc("Cup", Vector3.new(0.3, 0.75, 0.75), CFrame.new(x * hs.X * 0.58, 0, 0), Color3.fromRGB(240, 240, 240), Enum.Material.SmoothPlastic, nil, Enum.PartType.Cylinder)
+		end
+	end
+	if has.beret then
 		acc("Beret", Vector3.new(hs.X * 1.1, 0.25, hs.Z * 1.1), CFrame.new(0.12, hs.Y * 0.62, 0) * CFrame.Angles(0, 0, -0.2), Color3.fromRGB(150, 30, 60), Enum.Material.Fabric)
-	elseif def.personality == "Rebel" then
+	end
+	if has.shades then
 		acc("Shades", Vector3.new(hs.X * 0.95, 0.24, 0.08), CFrame.new(0, hs.Y * 0.1, -hs.Z * 0.54), Color3.fromRGB(15, 15, 15), Enum.Material.Glass)
-		acc("Jacket", Vector3.new(torso.Size.X * 1.06, torso.Size.Y * 0.95, torso.Size.Z * 1.08), CFrame.new(0, 0, 0), Color3.fromRGB(30, 30, 35), Enum.Material.Leather, torso).Transparency = 0
-	elseif def.personality == "Prankster" then
+	end
+	if has.jacket then
+		acc("Jacket", Vector3.new(torso.Size.X * 1.06, torso.Size.Y * 0.95, torso.Size.Z * 1.08), CFrame.new(0, 0, 0), Color3.fromRGB(30, 30, 35), Enum.Material.Leather, torso)
+	end
+	if has.propeller then
 		acc("Propeller", Vector3.new(hs.X * 0.9, 0.25, hs.Z * 0.9), CFrame.new(0, hs.Y * 0.6, 0), Color3.fromRGB(255, 200, 50), Enum.Material.Fabric)
 		acc("Blade", Vector3.new(1.4, 0.05, 0.22), CFrame.new(0, hs.Y * 0.6 + 0.3, 0), Color3.fromRGB(240, 70, 70))
+	end
+	if has.greenaura then
+		local aura = Instance.new("ParticleEmitter")
+		aura.Name = "GreenAura"
+		aura.Color = ColorSequence.new(Color3.fromRGB(60, 255, 90))
+		aura.LightEmission = 0.8
+		aura.Transparency = NumberSequence.new(0.3, 1)
+		aura.Size = NumberSequence.new(1.6, 0.2)
+		aura.Rate = 14
+		aura.Lifetime = NumberRange.new(0.8, 1.4)
+		aura.Speed = NumberRange.new(0.5, 1.5)
+		aura.SpreadAngle = Vector2.new(180, 180)
+		aura.Parent = torso
+		local glow = Instance.new("PointLight")
+		glow.Color = Color3.fromRGB(60, 255, 90)
+		glow.Range = 8
+		glow.Brightness = 0.8
+		glow.Parent = torso
 	end
 	local root = m.HumanoidRootPart
 	m:PivotTo(cf * CFrame.new(0, rootAboveFeet, 0))
@@ -664,7 +723,7 @@ function PlotService.BuildStudentModel(uid, student, cf)
 	end
 	local def = Config.StudentById[student.id]
 	local rarity = Config.Rarities[def.rarity]
-	local pers = Config.Personalities[def.personality]
+	local look = Config.Looks[def.look]
 	local seed = 0
 	for i = 1, #uid do
 		seed += string.byte(uid, i) * i
@@ -673,7 +732,7 @@ function PlotService.BuildStudentModel(uid, student, cf)
 
 	local m = Instance.new("Model")
 	m.Name = def.name
-	local root = part({ Name = "Root", Size = Vector3.new(2, 2, 1), CFrame = cf * CFrame.new(0, 3, 0), Color = pers.color, Parent = m })
+	local root = part({ Name = "Root", Size = Vector3.new(2, 2, 1), CFrame = cf * CFrame.new(0, 3, 0), Color = def.shirt or look.color, Parent = m })
 	m.PrimaryPart = root
 	local function limb(name, size, offset, color)
 		local p = part({ Name = name, Size = size, CFrame = root.CFrame * offset, Color = color, Parent = m })
@@ -696,13 +755,13 @@ function PlotService.BuildStudentModel(uid, student, cf)
 	face.Texture = "rbxasset://textures/face.png"
 	face.Face = Enum.NormalId.Front
 	face.Parent = head
-	if def.personality == "Royal" then
+	if def.look == "Royal" then
 		limb("Crown", Vector3.new(1.1, 0.5, 1.1), CFrame.new(0, 2.55, 0), Color3.fromRGB(255, 210, 60)).Material = Enum.Material.Neon
-	elseif def.personality == "Nerd" then
+	elseif def.look == "Nerd" then
 		limb("Glasses", Vector3.new(1.2, 0.3, 0.1), CFrame.new(0, 1.8, -0.7), Color3.fromRGB(20, 20, 20))
-	elseif def.personality == "Musician" then
+	elseif def.look == "Musician" then
 		limb("Guitar", Vector3.new(0.6, 2.2, 0.3), CFrame.new(0.4, -0.2, -0.7) * CFrame.Angles(0, 0, 0.6), Color3.fromRGB(180, 60, 40))
-	elseif def.personality == "Jock" then
+	elseif def.look == "Jock" then
 		limb("Cap", Vector3.new(1.4, 0.4, 1.6), CFrame.new(0, 2.4, -0.2), Color3.fromRGB(220, 50, 50))
 	end
 
@@ -1372,7 +1431,7 @@ local function renderStructure(plot, data)
 					elseif s.kind == "dorm" then
 						local room = data.rooms[s.index]
 						if room and room.tier >= 2 then
-							cyl(m, rcf, 7, 0.28, 0, 0.12, 6, Config.Personalities.Artist.color, { Material = Enum.Material.Fabric })
+							cyl(m, rcf, 7, 0.28, 0, 0.12, 6, Config.Looks.Artist.color, { Material = Enum.Material.Fabric })
 						end
 						if room and room.tier >= 3 then
 							-- a desk under the side wall and a wall picture
@@ -1534,7 +1593,7 @@ local function studentsBoard(sg, data)
 			if s then
 				housed[uid] = true
 				local def = Config.StudentById[s.id]
-				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:Lerp(Color3.new(0, 0, 0), 0.35):ToHex(), Config.Personalities[def.personality].emoji, string.match(def.name, "%S+$") or def.name))
+				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:Lerp(Color3.new(0, 0, 0), 0.35):ToHex(), Config.TagEmoji(def), string.match(def.name, "%S+$") or def.name))
 			end
 		end
 		table.insert(lines, string.format("<b>Room %d</b> (%d/%d)  %s", i, #room.occupants, Config.Beds(room), #names > 0 and table.concat(names, ", ") or "empty"))
@@ -1647,7 +1706,8 @@ local function renderLive(plot, data, totals)
 				local occ = room.occupants[b]
 				local color = Color3.fromRGB(120, 160, 230)
 				if occ and data.students[occ] then
-					color = Config.Personalities[Config.StudentById[data.students[occ].id].personality].color
+					local occDef = Config.StudentById[data.students[occ].id]
+					color = occDef.shirt or Config.Looks[occDef.look].color
 				end
 				bed(lv, rcf * CFrame.new(ROOM_U - 4.2, 0.2, v) * BED_TURN, color)
 				-- nightstand + lamp between beds when there's space

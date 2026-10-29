@@ -180,8 +180,23 @@ local function roll(player, data, banner)
 	if Config.Rarities[rarity].rank >= 5 then
 		data.pity = 0
 	end
-	local pool = Config.StudentsByRarity[rarity]
-	local def = pool[math.random(1, #pool)]
+	-- the house rule decides who applies; weight makes some students rarer in their tier
+	local pool, total = {}, 0
+	for _, d in ipairs(Config.StudentsByRarity[rarity]) do
+		if data.houseGender == "Mixed" or (data.houseGender == "Boys") == (d.gender == "M") then
+			table.insert(pool, d)
+			total += d.weight or 1
+		end
+	end
+	local def = pool[#pool]
+	local pick = math.random() * total
+	for _, d in ipairs(pool) do
+		pick -= d.weight or 1
+		if pick <= 0 then
+			def = d
+			break
+		end
+	end
 	local shiny = math.random() < Config.ShinyChance
 	local uid = DataService.NewUid(data)
 	local isNew = not data.discovered[def.id]
@@ -235,15 +250,24 @@ local function autoArrange(player, data)
 	for i, room in ipairs(data.rooms) do
 		indexOf[room] = i
 	end
+	local ctx = SchoolMath.context(data)
 	local function roomIncome(room)
-		return SchoolMath.room(data, indexOf[room], room.occupants, mult).income
+		return SchoolMath.room(data, indexOf[room], room.occupants, mult, ctx).income
+	end
+	local function genderOf(uid)
+		return Config.StudentById[data.students[uid].id].gender
+	end
+	-- rooms are single-gender: a room takes its first occupant's gender
+	local function fits(room, uid)
+		local first = room.occupants[1]
+		return first == nil or genderOf(first) == genderOf(uid)
 	end
 
 	for n = 1, math.min(beds, #list) do
 		local uid = list[n].uid
 		local bestRoom, bestGain = nil, -math.huge
 		for _, room in ipairs(data.rooms) do
-			if #room.occupants < Config.Beds(room) then
+			if #room.occupants < Config.Beds(room) and fits(room, uid) then
 				local before = roomIncome(room)
 				table.insert(room.occupants, uid)
 				local gain = roomIncome(room) - before
@@ -265,6 +289,9 @@ local function autoArrange(player, data)
 			local ra, rb = rooms[a], rooms[b]
 			for i = 1, #ra.occupants do
 				for j = 1, #rb.occupants do
+					if genderOf(ra.occupants[i]) ~= genderOf(rb.occupants[j]) and (#ra.occupants > 1 or #rb.occupants > 1) then
+						continue
+					end
 					local before = roomIncome(ra) + roomIncome(rb)
 					ra.occupants[i], rb.occupants[j] = rb.occupants[j], ra.occupants[i]
 					if roomIncome(ra) + roomIncome(rb) <= before + 1e-6 then
@@ -330,6 +357,10 @@ function Actions.assign(player, data, args)
 	if #room.occupants >= Config.Beds(room) then
 		return { ok = false, err = "That room is full. Upgrade or expand it for more beds!" }
 	end
+	local gender = SchoolMath.roomGender(data, roomIndex)
+	if gender and gender ~= Config.StudentById[data.students[uid].id].gender then
+		return { ok = false, err = gender == "F" and "That's a girls' room!" or "That's a boys' room!" }
+	end
 	removeFromRoom(data, uid)
 	table.insert(room.occupants, uid)
 	return { ok = true }
@@ -340,6 +371,14 @@ function Actions.unassign(player, data, args)
 		return { ok = false }
 	end
 	removeFromRoom(data, args.uid)
+	return { ok = true }
+end
+
+function Actions.houseGender(player, data, args)
+	if not Config.HouseGenders[args.value] then
+		return { ok = false }
+	end
+	data.houseGender = args.value
 	return { ok = true }
 end
 
@@ -357,6 +396,12 @@ function Actions.expel(player, data, args)
 	local value = Config.Rarities[def.rarity].expel * (s.shiny and 3 or 1)
 	removeFromRoom(data, args.uid)
 	data.students[args.uid] = nil
+	for key in pairs(data.bonds) do
+		local x, y = string.match(key, "^(.-)|(.*)$")
+		if x == args.uid or y == args.uid then
+			data.bonds[key] = nil
+		end
+	end
 	data.cash += value
 	return { ok = true, value = value }
 end
@@ -762,6 +807,41 @@ task.spawn(function()
 					ls.Cash.Value = "$" .. SchoolMath.format(data.cash)
 				end
 				TickEv:FireClient(player, data.cash, inc)
+			end
+		end
+	end
+end)
+
+---------------------------------------------------------------------------
+-- Bonds: roommates grow closer (or apart) depending on their vibe
+---------------------------------------------------------------------------
+local function tickBonds(data)
+	for _, room in ipairs(data.rooms) do
+		local occ = room.occupants
+		for a = 1, #occ do
+			for b = a + 1, #occ do
+				local sa, sb = data.students[occ[a]], data.students[occ[b]]
+				if sa and sb then
+					local v = SchoolMath.vibe(Config.StudentById[sa.id], Config.StudentById[sb.id])
+					local key = Config.BondKey(occ[a], occ[b])
+					local before = data.bonds[key] or 0
+					local after = math.clamp(before + (v * 100 - 50) * Config.BondPerTick, Config.BondMin, Config.BondMax)
+					data.bonds[key] = after
+				end
+			end
+		end
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(Config.BondTick)
+		for player in pairs(session) do
+			local data = DataService.Get(player)
+			if data then
+				tickBonds(data)
+				recompute(player)
+				pushState(player)
 			end
 		end
 	end

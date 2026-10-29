@@ -28,88 +28,149 @@ Config.ShinyChance = 1 / 40
 Config.ShinyMultiplier = 2
 
 ---------------------------------------------------------------------------
--- Personalities + chemistry (symmetric; -2 hate .. +2 besties)
+-- Tags. Every student has 1-3. `base` is how well the tag gets along with
+-- anyone by default (0.5 = neutral); Vibe below overrides specific pairs.
 ---------------------------------------------------------------------------
-Config.Personalities = {
-	Nerd = { color = Color3.fromRGB(80, 120, 220), emoji = "🤓" },
-	Jock = { color = Color3.fromRGB(220, 70, 60), emoji = "🏈" },
-	Artist = { color = Color3.fromRGB(240, 150, 200), emoji = "🎨" },
-	Rebel = { color = Color3.fromRGB(40, 40, 50), emoji = "😎" },
-	Prankster = { color = Color3.fromRGB(250, 200, 50), emoji = "🤪" },
-	Musician = { color = Color3.fromRGB(150, 80, 200), emoji = "🎸" },
-	Gamer = { color = Color3.fromRGB(40, 200, 180), emoji = "🎮" },
-	Royal = { color = Color3.fromRGB(245, 215, 110), emoji = "👑" },
+Config.Tags = {
+	Alpha = { name = "Alpha", emoji = "🐺", color = Color3.fromRGB(200, 60, 60), text = "Leader, competitive" },
+	Chad = { name = "Chad", emoji = "🗿", color = Color3.fromRGB(230, 170, 90), text = "Confident, everyone likes him" },
+	Nerd = { name = "Nerd", emoji = "🤓", color = Color3.fromRGB(80, 120, 220), text = "Studies, math, good grades" },
+	Gamer = { name = "Gamer", emoji = "🎮", color = Color3.fromRGB(40, 200, 180), text = "Lives on the console" },
+	Artistic = { name = "Artistic", emoji = "🎨", color = Color3.fromRGB(240, 150, 200), text = "Draws, paints, aesthetic" },
+	Musician = { name = "Musician", emoji = "🎸", color = Color3.fromRGB(150, 80, 200), text = "Guitar, playlists" },
+	Funny = { name = "Funny", emoji = "🤪", color = Color3.fromRGB(250, 200, 50), text = "Class clown", base = 0.55 },
+	Bully = { name = "Bully", emoji = "😈", color = Color3.fromRGB(90, 40, 40), text = "Picks on others", base = 0.42 },
+	Normal = { name = "Normal", emoji = "🙂", color = Color3.fromRGB(150, 160, 170), text = "Easygoing, fits anywhere", base = 0.52 },
+	Chud = { name = "Chud", emoji = "😤", color = Color3.fromRGB(110, 120, 80), text = "Online, contrarian, gloomy", base = 0.45 },
+	Sleepy = { name = "Sleepy", emoji = "😴", color = Color3.fromRGB(140, 170, 120), text = "Super chill, naps, snacks" },
+	Carefree = { name = "Carefree", emoji = "🌈", color = Color3.fromRGB(120, 200, 230), text = "Goes with the flow" },
+	Jock = { name = "Jock", emoji = "🏈", color = Color3.fromRGB(220, 70, 60), text = "Sports, early mornings" },
+	RichKid = { name = "Rich Kid", emoji = "💎", color = Color3.fromRGB(245, 215, 110), text = "Designer clothes, brags" },
+	Charismatic = { name = "Charismatic", emoji = "😎", color = Color3.fromRGB(255, 140, 90), text = "Natural people person", base = 0.6 },
+	Indie = { name = "Indie", emoji = "🎧", color = Color3.fromRGB(90, 90, 110), text = "Niche music taste" },
+	LaRose = { name = "La Rose", emoji = "🌹", color = Color3.fromRGB(255, 90, 140), text = "Part of the La Rose crew" },
 }
+Config.TagOrder = { "Alpha", "Chad", "Nerd", "Gamer", "Artistic", "Musician", "Funny", "Bully", "Normal", "Chud", "Sleepy", "Carefree", "Jock", "RichKid", "Charismatic", "Indie", "LaRose" }
 
-local chem = {
-	Nerd = { Nerd = 1, Jock = -1, Artist = 0, Rebel = -1, Prankster = -2, Musician = 0, Gamer = 2, Royal = 0 },
-	Jock = { Jock = 1, Artist = -1, Rebel = 1, Prankster = 1, Musician = 0, Gamer = -1, Royal = 0 },
-	Artist = { Artist = 1, Rebel = 1, Prankster = 0, Musician = 2, Gamer = 0, Royal = -1 },
-	Rebel = { Rebel = 0, Prankster = 2, Musician = 1, Gamer = 0, Royal = -2 },
-	Prankster = { Prankster = -1, Musician = 0, Gamer = 1, Royal = -2 },
-	Musician = { Musician = 1, Gamer = 0, Royal = 1 },
-	Gamer = { Gamer = 1, Royal = -1 },
-	Royal = { Royal = 2 },
+-- Vibe between two tags, 0..1 (symmetric). Pairs not listed use the tags' base values.
+local vibePairs = {
+	{ "Alpha", "Alpha", 0.3 }, { "Alpha", "Chad", 0.75 }, { "Alpha", "Funny", 0.65 }, { "Alpha", "Bully", 0.3 }, { "Alpha", "Sleepy", 0.3 },
+	{ "Alpha", "Carefree", 0.35 }, { "Alpha", "RichKid", 0.7 }, { "Alpha", "Jock", 0.65 }, { "Alpha", "Nerd", 0.4 },
+	{ "Chad", "Chad", 0.7 }, { "Chad", "Funny", 0.7 }, { "Chad", "Jock", 0.75 }, { "Chad", "Chud", 0.2 }, { "Chad", "Charismatic", 0.7 }, { "Chad", "RichKid", 0.6 },
+	{ "Nerd", "Nerd", 0.75 }, { "Nerd", "Gamer", 0.8 }, { "Nerd", "Bully", 0.15 }, { "Nerd", "Jock", 0.3 }, { "Nerd", "Musician", 0.4 }, { "Nerd", "Indie", 0.6 },
+	{ "Gamer", "Gamer", 0.75 }, { "Gamer", "Jock", 0.35 }, { "Gamer", "Chud", 0.65 }, { "Gamer", "Funny", 0.65 }, { "Gamer", "Sleepy", 0.6 },
+	{ "Artistic", "Artistic", 0.65 }, { "Artistic", "Musician", 0.8 }, { "Artistic", "Carefree", 0.75 }, { "Artistic", "Bully", 0.15 }, { "Artistic", "Indie", 0.75 }, { "Artistic", "Sleepy", 0.6 },
+	{ "Musician", "Musician", 0.65 }, { "Musician", "Carefree", 0.7 }, { "Musician", "Sleepy", 0.6 }, { "Musician", "Indie", 0.75 },
+	{ "Funny", "Funny", 0.7 }, { "Funny", "Chud", 0.25 }, { "Funny", "Sleepy", 0.65 }, { "Funny", "Bully", 0.4 },
+	{ "Bully", "Bully", 0.65 }, { "Bully", "Normal", 0.25 }, { "Bully", "Charismatic", 0.3 }, { "Bully", "Carefree", 0.35 }, { "Bully", "Indie", 0.25 },
+	{ "Normal", "Normal", 0.6 },
+	{ "Chud", "Chud", 0.7 }, { "Chud", "RichKid", 0.3 }, { "Chud", "Charismatic", 0.35 },
+	{ "Sleepy", "Sleepy", 0.7 }, { "Sleepy", "Carefree", 0.8 }, { "Sleepy", "Jock", 0.3 },
+	{ "Carefree", "Carefree", 0.7 },
+	{ "Jock", "Jock", 0.7 }, { "Jock", "RichKid", 0.55 },
+	{ "RichKid", "RichKid", 0.7 }, { "RichKid", "Normal", 0.45 },
+	{ "Charismatic", "Charismatic", 0.7 },
+	{ "Indie", "Indie", 0.7 },
+	{ "LaRose", "LaRose", 0.95 },
 }
--- mirror so lookups work both ways
-for a, row in pairs(chem) do
-	for b, v in pairs(row) do
-		chem[b] = chem[b] or {}
-		chem[b][a] = v
+Config.TagVibe = {}
+for _, a in ipairs(Config.TagOrder) do
+	Config.TagVibe[a] = {}
+	for _, b in ipairs(Config.TagOrder) do
+		local ba, bb = Config.Tags[a].base or 0.5, Config.Tags[b].base or 0.5
+		Config.TagVibe[a][b] = math.clamp(0.5 + (ba - 0.5) + (bb - 0.5), 0.05, 0.95)
 	end
 end
-Config.Chemistry = chem
-Config.ChemistryPoints = 12 -- satisfaction per chemistry step
+for _, p in ipairs(vibePairs) do
+	Config.TagVibe[p[1]][p[2]] = p[3]
+	Config.TagVibe[p[2]][p[1]] = p[3]
+end
+Config.LaRoseVibe = 0.95 -- any two La Rose members vibe at least this much
+Config.VibePoints = 0.8 -- satisfaction per roommate = (vibe% - 50) * this
 Config.BaseSatisfaction = 40
 
+-- Old saves and visuals: the outfit/accessory set a student wears.
+Config.Looks = {
+	Nerd = { color = Color3.fromRGB(80, 120, 220) },
+	Jock = { color = Color3.fromRGB(220, 70, 60) },
+	Artist = { color = Color3.fromRGB(240, 150, 200) },
+	Rebel = { color = Color3.fromRGB(40, 40, 50) },
+	Prankster = { color = Color3.fromRGB(250, 200, 50) },
+	Musician = { color = Color3.fromRGB(150, 80, 200) },
+	Gamer = { color = Color3.fromRGB(40, 200, 180) },
+	Royal = { color = Color3.fromRGB(245, 215, 110) },
+}
+
 ---------------------------------------------------------------------------
--- Students. trait types:
+-- Students. gender "M"/"F". look = outfit set (Config.Looks), optional
+-- shirt/skin/hair colors and extra accessories (`acc`) override it.
+-- trait types:
 --   Mood     : +value satisfaction to every roommate
---   Gold     : multiplies income of the whole room by value
---   Peace    : negative chemistry in the room is ignored
+--   Gold     : multiplies income of the whole room by value (needs = living room item)
+--   Peace    : negative vibe in the room is ignored
+--   Chill    : this student never has negative vibe with anyone
 --   Loner    : +value satisfaction when alone in a room
 --   Social   : +value satisfaction per roommate (to self)
+--   Floor    : +value satisfaction to everyone housed on the same floor
+--   Rivals   : +value income multiplier per student in the house who can't stand them
+-- weight: pull chance inside its rarity (default 1)
 ---------------------------------------------------------------------------
 Config.Students = {
 	-- Common
-	{ id = "tim", name = "Quiet Tim", rarity = "Common", personality = "Nerd" },
-	{ id = "becky", name = "Benchwarmer Becky", rarity = "Common", personality = "Jock" },
-	{ id = "dan", name = "Doodle Dan", rarity = "Common", personality = "Artist" },
-	{ id = "sam", name = "Skater Sam", rarity = "Common", personality = "Rebel" },
-	{ id = "will", name = "Whoopee Will", rarity = "Common", personality = "Prankster" },
-	{ id = "kelly", name = "Kazoo Kelly", rarity = "Common", personality = "Musician" },
-	{ id = "pete", name = "Pixel Pete", rarity = "Common", personality = "Gamer" },
-	{ id = "larry", name = "Lil Lord Larry", rarity = "Common", personality = "Royal" },
+	{ id = "tim", name = "Quiet Tim", rarity = "Common", gender = "M", look = "Nerd", tags = { "Nerd" } },
+	{ id = "becky", name = "Benchwarmer Becky", rarity = "Common", gender = "F", look = "Jock", tags = { "Jock" } },
+	{ id = "dan", name = "Doodle Dan", rarity = "Common", gender = "M", look = "Artist", tags = { "Artistic" } },
+	{ id = "sam", name = "Skater Sam", rarity = "Common", gender = "M", look = "Rebel", tags = { "Carefree" } },
+	{ id = "will", name = "Whoopee Will", rarity = "Common", gender = "M", look = "Prankster", tags = { "Funny" } },
+	{ id = "kelly", name = "Kazoo Kelly", rarity = "Common", gender = "F", look = "Musician", tags = { "Musician" } },
+	{ id = "pete", name = "Pixel Pete", rarity = "Common", gender = "M", look = "Gamer", tags = { "Gamer" } },
+	{ id = "larry", name = "Lil Lord Larry", rarity = "Common", gender = "M", look = "Royal", tags = { "RichKid" } },
+	{ id = "sue", name = "Sleepy Sue", rarity = "Common", gender = "F", look = "Rebel", shirt = Color3.fromRGB(140, 170, 120), tags = { "Sleepy" } },
+	{ id = "dana", name = "Doomscroll Dana", rarity = "Common", gender = "F", look = "Gamer", shirt = Color3.fromRGB(110, 120, 80), tags = { "Chud" } },
+	{ id = "nora", name = "Normal Nora", rarity = "Common", gender = "F", look = "Nerd", shirt = Color3.fromRGB(150, 160, 170), acc = {}, tags = { "Normal" } },
+	{ id = "bruno", name = "Big Bruno", rarity = "Common", gender = "M", look = "Jock", shirt = Color3.fromRGB(90, 40, 40), tags = { "Bully" } },
 	-- Uncommon
-	{ id = "mia", name = "Mathlete Mia", rarity = "Uncommon", personality = "Nerd" },
-	{ id = "cole", name = "Captain Cole", rarity = "Uncommon", personality = "Jock" },
-	{ id = "gia", name = "Graffiti Gia", rarity = "Uncommon", personality = "Artist" },
-	{ id = "dex", name = "Detention Dex", rarity = "Uncommon", personality = "Rebel" },
-	{ id = "steve", name = "Slime Steve", rarity = "Uncommon", personality = "Prankster" },
-	{ id = "dre", name = "Drummer Dre", rarity = "Uncommon", personality = "Musician" },
-	{ id = "lulu", name = "Lag-Free Lulu", rarity = "Uncommon", personality = "Gamer" },
+	{ id = "mia", name = "Mathlete Mia", rarity = "Uncommon", gender = "F", look = "Nerd", tags = { "Nerd", "Alpha" } },
+	{ id = "cole", name = "Captain Cole", rarity = "Uncommon", gender = "M", look = "Jock", tags = { "Jock", "Alpha" } },
+	{ id = "gia", name = "Graffiti Gia", rarity = "Uncommon", gender = "F", look = "Artist", tags = { "Artistic", "Carefree" } },
+	{ id = "dex", name = "Detention Dex", rarity = "Uncommon", gender = "M", look = "Rebel", tags = { "Bully", "Funny" } },
+	{ id = "steve", name = "Slime Steve", rarity = "Uncommon", gender = "M", look = "Prankster", tags = { "Funny", "Gamer" } },
+	{ id = "dre", name = "Drummer Dre", rarity = "Uncommon", gender = "M", look = "Musician", tags = { "Musician", "Carefree" } },
+	{ id = "lulu", name = "Lag-Free Lulu", rarity = "Uncommon", gender = "F", look = "Gamer", tags = { "Gamer", "Sleepy" } },
+	{ id = "gwen", name = "Glitter Gwen", rarity = "Uncommon", gender = "F", look = "Artist", shirt = Color3.fromRGB(245, 215, 110), tags = { "Artistic", "RichKid" } },
 	-- Rare
-	{ id = "riley", name = "Robo Riley", rarity = "Rare", personality = "Nerd", trait = { kind = "Gold", value = 1.25, text = "Room income x1.25" } },
-	{ id = "marcus", name = "MVP Marcus", rarity = "Rare", personality = "Jock", trait = { kind = "Mood", value = 8, text = "+8 mood to roommates" } },
-	{ id = "maya", name = "Muralist Maya", rarity = "Rare", personality = "Artist", trait = { kind = "Social", value = 6, text = "+6 mood per roommate" } },
-	{ id = "priya", name = "Punk Priya", rarity = "Rare", personality = "Rebel", trait = { kind = "Loner", value = 30, text = "+30 mood when alone" } },
-	{ id = "sofia", name = "Speedrun Sofia", rarity = "Rare", personality = "Gamer" },
-	{ id = "daisy", name = "Duchess Daisy", rarity = "Rare", personality = "Royal" },
+	{ id = "riley", name = "Robo Riley", rarity = "Rare", gender = "F", look = "Nerd", tags = { "Nerd", "Gamer" }, trait = { kind = "Gold", value = 1.25, text = "Room income x1.25" } },
+	{ id = "marcus", name = "MVP Marcus", rarity = "Rare", gender = "M", look = "Jock", tags = { "Jock", "Chad" }, trait = { kind = "Mood", value = 8, text = "+8 mood to roommates" } },
+	{ id = "maya", name = "Muralist Maya", rarity = "Rare", gender = "F", look = "Artist", tags = { "Artistic", "Indie" }, trait = { kind = "Social", value = 6, text = "+6 mood per roommate" } },
+	{ id = "priya", name = "Punk Priya", rarity = "Rare", gender = "F", look = "Rebel", tags = { "Indie", "Alpha" }, trait = { kind = "Loner", value = 30, text = "+30 mood when alone" } },
+	{ id = "sofia", name = "Speedrun Sofia", rarity = "Rare", gender = "F", look = "Gamer", tags = { "Gamer", "Alpha" } },
+	{ id = "daisy", name = "Duchess Daisy", rarity = "Rare", gender = "F", look = "Royal", tags = { "RichKid", "Charismatic" } },
+	{ id = "chloe", name = "Choir Chloe", rarity = "Rare", gender = "F", look = "Musician", tags = { "Musician", "Charismatic" }, trait = { kind = "Mood", value = 6, text = "+6 mood to roommates" } },
 	-- Epic
-	{ id = "junior", name = "Prof. Junior", rarity = "Epic", personality = "Nerd", trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
-	{ id = "ollie", name = "Olympic Ollie", rarity = "Epic", personality = "Jock", trait = { kind = "Mood", value = 12, text = "+12 mood to roommates" } },
-	{ id = "penny", name = "Pop Star Penny", rarity = "Epic", personality = "Musician", trait = { kind = "Social", value = 10, text = "+10 mood per roommate" } },
-	{ id = "hex", name = "Hacker Hex", rarity = "Epic", personality = "Gamer", trait = { kind = "Gold", value = 1.5, text = "Room income x1.5" } },
-	{ id = "kai", name = "Chaos Kai", rarity = "Epic", personality = "Prankster", trait = { kind = "Mood", value = 10, text = "+10 mood to roommates" } },
+	{ id = "junior", name = "Prof. Junior", rarity = "Epic", gender = "M", look = "Nerd", tags = { "Nerd", "Normal" }, trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
+	{ id = "ollie", name = "Olympic Ollie", rarity = "Epic", gender = "M", look = "Jock", tags = { "Jock", "Chad" }, trait = { kind = "Mood", value = 12, text = "+12 mood to roommates" } },
+	{ id = "penny", name = "Pop Star Penny", rarity = "Epic", gender = "F", look = "Musician", tags = { "Musician", "Charismatic" }, trait = { kind = "Social", value = 10, text = "+10 mood per roommate" } },
+	{ id = "hex", name = "Hacker Hex", rarity = "Epic", gender = "F", look = "Gamer", tags = { "Gamer", "Chud" }, trait = { kind = "Gold", value = 1.5, text = "Room income x1.5" } },
+	{ id = "kai", name = "Chaos Kai", rarity = "Epic", gender = "M", look = "Prankster", tags = { "Funny", "Bully" }, trait = { kind = "Mood", value = 10, text = "+10 mood to roommates" } },
+	{ id = "bella", name = "Bossy Bella", rarity = "Epic", gender = "F", look = "Royal", tags = { "Alpha", "RichKid" }, trait = { kind = "Gold", value = 1.4, text = "Room income x1.4" } },
 	-- Legendary
-	{ id = "heir", name = "Headmaster's Heir", rarity = "Legendary", personality = "Royal", trait = { kind = "Mood", value = 20, text = "+20 mood to roommates" } },
-	{ id = "prodigy", name = "Prodigy Pixel", rarity = "Legendary", personality = "Gamer", trait = { kind = "Gold", value = 2, text = "Room income x2" } },
-	{ id = "remy", name = "Rockstar Remy", rarity = "Legendary", personality = "Musician", trait = { kind = "Social", value = 15, text = "+15 mood per roommate" } },
-	{ id = "ghost", name = "Ghost of Room 13", rarity = "Legendary", personality = "Rebel", trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
+	{ id = "heir", name = "Headmaster's Heir", rarity = "Legendary", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Charismatic" }, trait = { kind = "Mood", value = 20, text = "+20 mood to roommates" } },
+	{ id = "prodigy", name = "Prodigy Pixel", rarity = "Legendary", gender = "F", look = "Gamer", tags = { "Gamer", "Nerd", "Sleepy" }, trait = { kind = "Gold", value = 2, text = "Room income x2" } },
+	{ id = "remy", name = "Rockstar Remy", rarity = "Legendary", gender = "M", look = "Musician", tags = { "Musician", "Chad", "Charismatic" }, trait = { kind = "Social", value = 15, text = "+15 mood per roommate" } },
+	{ id = "ghost", name = "Ghost of Room 13", rarity = "Legendary", gender = "M", look = "Rebel", tags = { "Indie", "Sleepy", "Carefree" }, trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
+	{ id = "ivy", name = "Influencer Ivy", rarity = "Legendary", gender = "F", look = "Royal", acc = { "shades" }, tags = { "Charismatic", "RichKid", "Funny" }, trait = { kind = "Social", value = 12, text = "+12 mood per roommate" } },
+	-- La Rose crew (Legendary, rarer inside the pool)
+	{ id = "khan", name = "Khan D", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Gamer", acc = { "glasses", "headset" }, shirt = Color3.fromRGB(60, 60, 75), hair = Color3.fromRGB(20, 20, 22), skin = Color3.fromRGB(234, 200, 160), tags = { "LaRose", "Nerd", "Gamer" }, trait = { kind = "Gold", value = 2, needs = "console", text = "Room income x2 with a console in the living room" } },
+	{ id = "jp", name = "JP", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Musician", acc = { "guitar", "wavy" }, shirt = Color3.fromRGB(235, 235, 230), hair = Color3.fromRGB(45, 30, 20), skin = Color3.fromRGB(196, 140, 100), tags = { "LaRose", "Musician", "Charismatic" }, trait = { kind = "Mood", value = 20, text = "+20 mood to roommates" } },
+	{ id = "ed", name = "Ed", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Musician", acc = { "headphones", "curly" }, shirt = Color3.fromRGB(25, 25, 30), hair = Color3.fromRGB(40, 28, 20), skin = Color3.fromRGB(190, 135, 95), tags = { "LaRose", "Indie", "Musician" }, trait = { kind = "Chill", value = 1, text = "Never has a bad vibe with anyone" } },
+	{ id = "greg", name = "Greg", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Jock", acc = { "shades", "bighair" }, shirt = Color3.fromRGB(30, 60, 140), hair = Color3.fromRGB(90, 60, 35), skin = Color3.fromRGB(240, 205, 175), tags = { "LaRose", "Funny", "Charismatic", "Chad" }, trait = { kind = "Floor", value = 5, text = "+5 mood to everyone on his floor" } },
+	{ id = "miguel", name = "Miguel", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Rebel", acc = { "greenaura" }, shirt = Color3.fromRGB(40, 70, 40), hair = Color3.fromRGB(60, 230, 90), skin = Color3.fromRGB(240, 210, 185), tags = { "LaRose", "Chud" }, trait = { kind = "Rivals", value = 0.1, text = "+10% income per rival in the house" } },
 	-- Mythic
-	{ id = "tess", name = "Time Traveler Tess", rarity = "Mythic", personality = "Nerd", trait = { kind = "Gold", value = 3, text = "Room income x3" } },
-	{ id = "dragon", name = "Dragon Exchange Student", rarity = "Mythic", personality = "Royal", trait = { kind = "Mood", value = 30, text = "+30 mood to roommates" } },
+	{ id = "tess", name = "Time Traveler Tess", rarity = "Mythic", gender = "F", look = "Nerd", tags = { "Nerd", "Carefree", "Charismatic" }, trait = { kind = "Gold", value = 3, text = "Room income x3" } },
+	{ id = "dragon", name = "Dragon Exchange Student", rarity = "Mythic", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Chad" }, trait = { kind = "Mood", value = 30, text = "+30 mood to roommates" } },
 }
+Config.CrewBonus = { LaRose = 0.25 } -- +25% income for the whole house with the full crew
+Config.Crews = { LaRose = {} }
 
 Config.StudentById = {}
 Config.StudentsByRarity = {}
@@ -117,7 +178,65 @@ for _, s in ipairs(Config.Students) do
 	Config.StudentById[s.id] = s
 	Config.StudentsByRarity[s.rarity] = Config.StudentsByRarity[s.rarity] or {}
 	table.insert(Config.StudentsByRarity[s.rarity], s)
+	if s.crew then
+		table.insert(Config.Crews[s.crew], s.id)
+	end
 end
+
+-- "🤓 Nerd  🎮 Gamer"
+function Config.TagLine(def, sep)
+	local bits = {}
+	for _, t in ipairs(def.tags) do
+		local tag = Config.Tags[t]
+		table.insert(bits, tag.emoji .. " " .. tag.name)
+	end
+	return table.concat(bits, sep or "  ")
+end
+function Config.TagEmoji(def)
+	return Config.Tags[def.tags[1]].emoji
+end
+
+-- Relationships. Every pair who has met has a bond score (-50..100); the
+-- level adds satisfaction while they share a room.
+Config.BondLevels = {
+	{ min = -50, name = "Rivals", emoji = "💢", sat = -10 },
+	{ min = 0, name = "Strangers", emoji = "😶", sat = 0 },
+	{ min = 20, name = "Acquaintances", emoji = "👋", sat = 2 },
+	{ min = 40, name = "Friends", emoji = "🙂", sat = 5 },
+	{ min = 60, name = "Close friends", emoji = "😊", sat = 8 },
+	{ min = 80, name = "Best friends", emoji = "💞", sat = 12 },
+	{ min = 95, name = "Siblings", emoji = "🤝", sat = 15 },
+}
+Config.BondMin, Config.BondMax = -50, 100
+Config.BondTick = 180 -- seconds between roommate bond updates
+Config.BondPerTick = 0.1 -- roommates move (vibe% - 50) * this per tick
+Config.SiblingSplitPenalty = 15 -- satisfaction lost per sibling living in another room
+
+function Config.BondLevel(score)
+	local level = Config.BondLevels[1]
+	for _, l in ipairs(Config.BondLevels) do
+		if score >= l.min then
+			level = l
+		end
+	end
+	return level
+end
+-- "Brothers" / "Sisters" / "Siblings" for the top level
+function Config.BondName(level, defA, defB)
+	if level.min == 95 and defA and defB and defA.gender == defB.gender then
+		return defA.gender == "F" and "Sisters" or "Brothers"
+	end
+	return level.name
+end
+function Config.BondKey(a, b)
+	if a < b then
+		return a .. "|" .. b
+	end
+	return b .. "|" .. a
+end
+
+-- House rule set on the floor plans board
+Config.HouseGenders = { Mixed = "👫 Mixed", Boys = "👦 Boys only", Girls = "👧 Girls only" }
 
 ---------------------------------------------------------------------------
 -- Admissions (gacha banners). weights are percentages.
@@ -210,18 +329,19 @@ function Config.RoomUpgradeCost(index, toTier)
 end
 
 ---------------------------------------------------------------------------
--- Facilities: rooms inside the house that boost everyone or a personality.
+-- Facilities: rooms inside the house that boost everyone or certain tags
+-- (a student gets the best boost among their tags).
 -- Built from the floor layout board in your room.
 ---------------------------------------------------------------------------
 Config.Facilities = {
 	{ id = "cafeteria", name = "Cafeteria", emoji = "🍕", cost = 2000, all = 5, text = "+5 mood for everyone", color = Color3.fromRGB(255, 160, 80) },
-	{ id = "library", name = "Library", emoji = "📚", cost = 6000, boost = { Nerd = 10, Royal = 4 }, text = "+10 Nerds, +4 Royals", color = Color3.fromRGB(120, 80, 50) },
-	{ id = "gym", name = "Gym", emoji = "🏋", cost = 6000, boost = { Jock = 10, Rebel = 4 }, text = "+10 Jocks, +4 Rebels", color = Color3.fromRGB(200, 60, 60) },
-	{ id = "arcade", name = "Arcade", emoji = "🕹", cost = 12000, boost = { Gamer = 10, Prankster = 6 }, text = "+10 Gamers, +6 Pranksters", color = Color3.fromRGB(60, 220, 200) },
-	{ id = "artstudio", name = "Art Studio", emoji = "🎨", cost = 12000, boost = { Artist = 10, Rebel = 4 }, text = "+10 Artists, +4 Rebels", color = Color3.fromRGB(240, 140, 200) },
-	{ id = "musichall", name = "Music Hall", emoji = "🎹", cost = 30000, boost = { Musician = 10, Artist = 4 }, text = "+10 Musicians, +4 Artists", color = Color3.fromRGB(150, 80, 220) },
+	{ id = "library", name = "Library", emoji = "📚", cost = 6000, boost = { Nerd = 10, Indie = 4 }, text = "+10 Nerds, +4 Indies", color = Color3.fromRGB(120, 80, 50) },
+	{ id = "gym", name = "Gym", emoji = "🏋", cost = 6000, boost = { Jock = 10, Alpha = 4, Chad = 4 }, text = "+10 Jocks, +4 Alphas and Chads", color = Color3.fromRGB(200, 60, 60) },
+	{ id = "arcade", name = "Arcade", emoji = "🕹", cost = 12000, boost = { Gamer = 10, Funny = 6, Chud = 4 }, text = "+10 Gamers, +6 Funnies, +4 Chuds", color = Color3.fromRGB(60, 220, 200) },
+	{ id = "artstudio", name = "Art Studio", emoji = "🎨", cost = 12000, boost = { Artistic = 10, Indie = 4 }, text = "+10 Artistics, +4 Indies", color = Color3.fromRGB(240, 140, 200) },
+	{ id = "musichall", name = "Music Hall", emoji = "🎹", cost = 30000, boost = { Musician = 10, Artistic = 4 }, text = "+10 Musicians, +4 Artistics", color = Color3.fromRGB(150, 80, 220) },
 	{ id = "pool", name = "Swimming Pool", emoji = "🏊", cost = 80000, all = 3, incomeMult = 0.15, text = "+3 mood, +15% income", color = Color3.fromRGB(60, 160, 255) },
-	{ id = "ballroom", name = "Grand Ballroom", emoji = "💃", cost = 200000, boost = { Royal = 12, Musician = 4 }, text = "+12 Royals, +4 Musicians", color = Color3.fromRGB(250, 210, 100) },
+	{ id = "ballroom", name = "Grand Ballroom", emoji = "💃", cost = 200000, boost = { RichKid = 12, Charismatic = 6 }, text = "+12 Rich Kids, +6 Charismatics", color = Color3.fromRGB(250, 210, 100) },
 	{ id = "observatory", name = "Observatory", emoji = "🔭", cost = 1000000, all = 5, incomeMult = 0.3, text = "+5 mood, +30% income", color = Color3.fromRGB(70, 60, 140) },
 }
 Config.FacilityById = {}

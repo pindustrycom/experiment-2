@@ -49,6 +49,9 @@ function DataService.Default()
 		layout = {}, -- [roomKey] = { floor, side, row } (see shared/House.lua)
 		styles = {}, -- [area] = { wall = id, floor = id, roof = id } (build mode)
 		furniture = {}, -- [furnitureId] = true (shown) / false (owned, hidden)
+		bonds = {}, -- [Config.BondKey(uidA, uidB)] = -50..100
+		houseGender = "Mixed", -- Mixed / Boys / Girls (see Config.HouseGenders)
+		livingItems = {}, -- [itemId] = true (living room)
 	}
 	data.layout.me = table.clone(House.Fixed.me)
 	data.layout.common = table.clone(House.Fixed.common)
@@ -78,12 +81,25 @@ local function reconcile(data)
 			data.students[uid] = nil
 		end
 	end
+	for key in pairs(data.bonds) do
+		local a, b = string.match(key, "^(.-)|(.*)$")
+		if not (a and data.students[a] and data.students[b]) then
+			data.bonds[key] = nil
+		end
+	end
+	if not Config.HouseGenders[data.houseGender] then
+		data.houseGender = "Mixed"
+	end
 	for _, room in ipairs(data.rooms) do
 		room.tier = math.clamp(room.tier or 1, 1, #Config.RoomTiers)
 		room.size = (room.size == 2) and 2 or 1
-		local kept = {}
+		-- rooms are single-gender: keep the first occupant's gender
+		local kept, gender = {}, nil
 		for _, uid in ipairs(room.occupants or {}) do
-			if data.students[uid] and #kept < Config.Beds(room) then
+			local s = data.students[uid]
+			local g = s and Config.StudentById[s.id].gender
+			gender = gender or g
+			if s and g == gender and #kept < Config.Beds(room) then
 				table.insert(kept, uid)
 			end
 		end

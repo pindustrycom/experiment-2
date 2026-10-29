@@ -280,10 +280,27 @@ local function showRoom(index)
 	openPanel("rooms")
 end
 
+-- tags with names when they fit, emoji only for 3+
+local function tagText(def)
+	if #def.tags <= 2 then
+		return Config.TagLine(def, " · ")
+	end
+	local e = {}
+	for _, t in ipairs(def.tags) do
+		table.insert(e, Config.Tags[t].emoji)
+	end
+	return table.concat(e, " ")
+end
+
+local function bondText(d, a, b)
+	local da, db = Config.StudentById[d.students[a].id], Config.StudentById[d.students[b].id]
+	local level = Config.BondLevel(SchoolMath.bond(d, a, b))
+	return level.emoji .. " " .. Config.BondName(level, da, db)
+end
+
 local function studentCard(parent, uid, s, extra)
 	local def = Config.StudentById[s.id]
 	local rarity = Config.Rarities[def.rarity]
-	local pers = Config.Personalities[def.personality]
 	local f = UI.card(parent, { BackgroundColor3 = C.card })
 	UI.stroke(f, rarity.color, rarity.rank >= 5 and 4 or 2)
 	if rarity.rank >= 4 then
@@ -294,9 +311,10 @@ local function studentCard(parent, uid, s, extra)
 		})
 	end
 	UI.pad(f, 8)
-	UI.text(f, pers.emoji, 38, C.text, { Size = UDim2.new(1, 0, 0, 44), TextXAlignment = Enum.TextXAlignment.Center })
-	UI.text(f, (s.shiny and "✨" or "") .. def.name, 16, C.text, { Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 38), TextXAlignment = Enum.TextXAlignment.Center })
-	UI.text(f, def.rarity .. " • " .. def.personality, 13, rarity.color, { Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Center })
+	UI.text(f, Config.TagEmoji(def), 38, C.text, { Size = UDim2.new(1, 0, 0, 44), TextXAlignment = Enum.TextXAlignment.Center })
+	UI.text(f, def.gender == "F" and "👧" or "👦", 16, C.text, { Size = UDim2.fromOffset(22, 22) })
+	UI.text(f, (s.shiny and "✨" or "") .. (def.crew and "🌹" or "") .. def.name, 16, def.crew and Config.Tags.LaRose.color or C.text, { Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 38), TextXAlignment = Enum.TextXAlignment.Center })
+	UI.text(f, tagText(def), 12, rarity.color, { Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Center })
 	if def.trait then
 		UI.text(f, def.trait.text, 12, C.sub, { Position = UDim2.fromOffset(0, 98), Size = UDim2.new(1, 0, 0, 28), TextXAlignment = Enum.TextXAlignment.Center })
 	end
@@ -396,11 +414,11 @@ local function reveal(results)
 		q:Destroy()
 		card.BackgroundColor3 = rarity.color:Lerp(Color3.new(0, 0, 0), 0.45)
 		card:FindFirstChildOfClass("UIStroke").Color = rarity.color
-		local pers = Config.Personalities[def.personality]
 		local big = single and 1.5 or 1
-		UI.text(card, pers.emoji, 54 * big, C.text, { Size = UDim2.new(1, 0, 0, 64 * big), Position = UDim2.fromOffset(0, 8), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 54 })
+		UI.text(card, Config.TagEmoji(def), 54 * big, C.text, { Size = UDim2.new(1, 0, 0, 64 * big), Position = UDim2.fromOffset(0, 8), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 54 })
 		UI.text(card, (r.shiny and "✨ " or "") .. def.name, 17 * big, C.text, { Size = UDim2.new(1, -8, 0, 44 * big), Position = UDim2.new(0, 4, 0, 72 * big), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 54 })
 		UI.text(card, string.upper(def.rarity), 18 * big, rarity.color, { Size = UDim2.new(1, 0, 0, 24 * big), Position = UDim2.fromOffset(0, 118 * big), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 54 })
+		UI.text(card, tagText(def), 11 * big, Color3.fromRGB(230, 230, 230), { Size = UDim2.new(1, -8, 0, 16 * big), Position = UDim2.new(0, 4, 0, 103 * big), TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 54 })
 		if r.new then
 			UI.text(card, "NEW!", 14 * big, C.gold, { Size = UDim2.fromOffset(60, 20), Position = UDim2.fromOffset(6, 4), ZIndex = 55 })
 		end
@@ -489,10 +507,10 @@ function Render.enroll()
 			end
 		end
 	end
-	UI.text(scroll, "Tip: two students with great chemistry in one room earn way more. Check the Rooms tab!", 15, C.sub, { LayoutOrder = 10, Size = UDim2.new(1, 0, 0, 40) })
+	UI.text(scroll, "Tip: students with a good vibe in one room earn way more, and become friends over time. Check the Rooms tab!", 15, C.sub, { LayoutOrder = 10, Size = UDim2.new(1, 0, 0, 40) })
 end
 
--- Room detail (with student picker that previews chemistry)
+-- Room detail (with student picker that previews the room with each candidate)
 local function renderRoom(index)
 	local d = State.data
 	local room = d.rooms[index]
@@ -547,27 +565,30 @@ local function renderRoom(index)
 		end
 	end
 
-	-- chemistry between roommates
+	-- vibe and friendship between roommates
 	if #room.occupants >= 2 then
 		local lines = {}
 		for a = 1, #room.occupants do
 			for b = a + 1, #room.occupants do
-				local da = Config.StudentById[d.students[room.occupants[a]].id]
-				local db = Config.StudentById[d.students[room.occupants[b]].id]
-				local c = SchoolMath.pairChemistry(da, db)
-				table.insert(lines, string.format("%s  %s + %s  (%s%d)", SchoolMath.chemEmoji(c), da.name, db.name, c >= 0 and "+" or "", c * Config.ChemistryPoints))
+				local ua, ub = room.occupants[a], room.occupants[b]
+				local da = Config.StudentById[d.students[ua].id]
+				local db = Config.StudentById[d.students[ub].id]
+				local v = SchoolMath.vibe(da, db)
+				local pts = SchoolMath.vibePoints(v)
+				table.insert(lines, string.format("%s  %s + %s   vibe <b>%d%%</b> (%s%d)   %s", SchoolMath.vibeEmoji(v), da.name, db.name, math.floor(v * 100 + 0.5), pts >= 0 and "+" or "", math.floor(pts + 0.5), bondText(d, ua, ub)))
 			end
 		end
-		UI.text(scroll, "<b>Chemistry</b>\n" .. table.concat(lines, "\n"), 16, C.text, { LayoutOrder = 3, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+		UI.text(scroll, "<b>Vibes</b>\n" .. table.concat(lines, "\n"), 16, C.text, { LayoutOrder = 3, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
 	end
 
 	-- picker
 	if panelState.picking and #room.occupants < beds then
-		UI.text(scroll, "<b>Pick a roommate</b>  (sorted by how much this room would earn)", 18, C.gold, { LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 26) })
+		UI.text(scroll, "<b>Pick a roommate</b>  (sorted by how much this room would earn" .. ((SchoolMath.roomGender(d, index) == "F" and ", girls' room") or (SchoolMath.roomGender(d, index) == "M" and ", boys' room") or "") .. ")", 18, C.gold, { LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 26) })
 		local options = {}
+		local gender = SchoolMath.roomGender(d, index)
 		for uid, s in pairs(d.students) do
 			local where = roomOf(uid)
-			if where ~= index then
+			if where ~= index and (not gender or Config.StudentById[s.id].gender == gender) then
 				local trial = table.clone(room.occupants)
 				table.insert(trial, uid)
 				local preview = SchoolMath.room(d, index, trial, State.mult)
@@ -624,7 +645,7 @@ function Render.rooms()
 			local s = d.students[uid]
 			if s then
 				local def = Config.StudentById[s.id]
-				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:ToHex(), Config.Personalities[def.personality].emoji, def.name))
+				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:ToHex(), Config.TagEmoji(def), def.name))
 			end
 		end
 		for _ = #room.occupants + 1, Config.Beds(room) do
@@ -661,9 +682,9 @@ function Render.students()
 			local f = UI.card(scroll, { LayoutOrder = rarity.rank * 100 + i, BackgroundColor3 = known and C.card or Color3.fromRGB(35, 33, 50) })
 			UI.stroke(f, rarity.color, 2)
 			UI.pad(f, 8)
-			UI.text(f, known and Config.Personalities[def.personality].emoji or "❔", 38, C.text, { Size = UDim2.new(1, 0, 0, 44), TextXAlignment = Enum.TextXAlignment.Center })
+			UI.text(f, known and Config.TagEmoji(def) or "❔", 38, C.text, { Size = UDim2.new(1, 0, 0, 44), TextXAlignment = Enum.TextXAlignment.Center })
 			UI.text(f, known and def.name or "???", 16, C.text, { Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 38), TextXAlignment = Enum.TextXAlignment.Center })
-			UI.text(f, def.rarity, 13, rarity.color, { Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Center })
+			UI.text(f, known and tagText(def) or def.rarity, 12, rarity.color, { Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Center })
 			if known and def.trait then
 				UI.text(f, def.trait.text, 12, C.sub, { Position = UDim2.fromOffset(0, 98), Size = UDim2.new(1, 0, 0, 28), TextXAlignment = Enum.TextXAlignment.Center })
 			end
@@ -796,6 +817,16 @@ function Render.layout()
 	UI.list(actions, 6)
 	if not sel or sel.floor ~= floor then
 		UI.text(actions, string.format("Tap a cell on the map.\n\n<b>%d</b> of %d dorm rooms built • <b>%d</b> empty cells in the house.\n\nBig rooms take two cells: +%d beds and +%d 🎀 decor.", #d.rooms, Config.MaxRooms, House.freeCells(d), Config.BigRoomBeds, Config.BigRoomDecor), 16, C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+		-- house rules: who can apply (rooms are always boys or girls)
+		UI.text(actions, "<b>📜 House rules</b>  who applies to your house. Each room is boys or girls, set by its first student.", 15, C.text, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+		for _, key in ipairs({ "Mixed", "Boys", "Girls" }) do
+			local on = d.houseGender == key
+			UI.button(actions, (on and "✓ " or "") .. Config.HouseGenders[key], on and C.purple or C.card, function()
+				if not on then
+					result(call("houseGender", { value = key }), "📜 House rule: " .. Config.HouseGenders[key])
+				end
+			end, { Size = UDim2.new(1, 0, 0, 36), TextSize = 15 })
+		end
 		return
 	end
 	local p = grid[sel.floor][sel.side][sel.row]
@@ -871,7 +902,7 @@ function Render.layout()
 end
 
 -- Happiness board: every room, unhappiest first, with why each student feels that way
-local PART_NAMES = { { "base", "base" }, { "decor", "decor" }, { "facilities", "facilities" }, { "chemistry", "roommates" }, { "friends", "mood buffs" }, { "trait", "trait" } }
+local PART_NAMES = { { "base", "base" }, { "decor", "decor" }, { "facilities", "facilities" }, { "vibe", "vibes" }, { "bonds", "friendships" }, { "friends", "mood buffs" }, { "trait", "trait" } }
 
 function Render.satisfaction()
 	local d = State.data
@@ -905,10 +936,28 @@ function Render.satisfaction()
 					local v = st.parts[pn[1]] or 0
 					if v ~= 0 or pn[1] == "base" then
 						local c = v > 0 and "#7ee08a" or v < 0 and "#ff8080" or "#cccccc"
-						table.insert(bits, string.format('<font color="%s">%s %s%d</font>', c, pn[2], (v > 0 and pn[1] ~= "base") and "+" or "", v))
+						table.insert(bits, string.format('<font color="%s">%s %s%d</font>', c, pn[2], (v > 0 and pn[1] ~= "base") and "+" or "", math.floor(v + 0.5)))
 					end
 				end
-				UI.text(card, string.format("%s %s <b>%d%%</b>   %s", Config.Personalities[def.personality].emoji, def.name, math.floor(st.sat), table.concat(bits, "  ")), 14, C.sub, { LayoutOrder = j, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+				local best, rivals = nil, 0
+				for key, score in pairs(d.bonds or {}) do
+					local x, y = string.match(key, "^(.-)|(.*)$")
+					local other = (x == uid and y) or (y == uid and x)
+					if other and d.students[other] then
+						if score < 0 then
+							rivals += 1
+						elseif score >= 80 and (not best or score > best.score) then
+							best = { uid = other, score = score }
+						end
+					end
+				end
+				if best then
+					table.insert(bits, "💞 best friend: " .. Config.StudentById[d.students[best.uid].id].name)
+				end
+				if rivals > 0 then
+					table.insert(bits, string.format('<font color="#ff8080">💢 %d rival%s</font>', rivals, rivals > 1 and "s" or ""))
+				end
+				UI.text(card, string.format("%s %s <b>%d%%</b>   %s", Config.TagEmoji(def), def.name, math.floor(st.sat), table.concat(bits, "  ")), 14, C.sub, { LayoutOrder = j, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
 			end
 		end
 		-- tips
@@ -918,9 +967,12 @@ function Render.satisfaction()
 				local sa, sb = d.students[e.room.occupants[a]], d.students[e.room.occupants[b]]
 				if sa and sb then
 					local da, db = Config.StudentById[sa.id], Config.StudentById[sb.id]
-					local c = SchoolMath.pairChemistry(da, db)
-					if c < 0 then
-						table.insert(tips, string.format("%s %s and %s don't get along", SchoolMath.chemEmoji(c), da.name, db.name))
+					local v = SchoolMath.vibe(da, db)
+					local score = SchoolMath.bond(d, e.room.occupants[a], e.room.occupants[b])
+					if score < 0 then
+						table.insert(tips, string.format("💢 %s and %s are rivals", da.name, db.name))
+					elseif v < 0.42 then
+						table.insert(tips, string.format("%s %s and %s have a bad vibe (%d%%)", SchoolMath.vibeEmoji(v), da.name, db.name, math.floor(v * 100 + 0.5)))
 					end
 				end
 			end
@@ -1184,7 +1236,7 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 			local steps = {
 				"🏠 Welcome, Headmaster! This is your room. You live in this boarding house with your students.",
 				"🛏 Walk out into the hallway, go to a dorm door and press <b>E</b> (or open <b>Rooms</b>) to move your 2 students in. Housed students earn cash every second.",
-				"💞 Roommates have <b>chemistry</b>! Nerds + Gamers are besties, Royals hate Rebels. Happy rooms earn up to 2x more.",
+				"💞 Every student has <b>tags</b>, and tags decide their <b>vibe</b>. Nerds + Gamers click, Bullies ruin rooms. Good roommates become friends, then best friends. Happy rooms earn up to 2x more.",
 				"🎓 Use <b>Enroll</b> to recruit new students. Find Legendary & Mythic ones and shiny ✨ variants!",
 				"📋 Your room has 3 boards on the wall. <b>Floor plans</b>: choose where new rooms and facilities go, expand rooms, add floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. Walk up and press <b>E</b>.",
 				"🎨 Use <b>Build</b> to pick materials for walls, floors and the roof, and to furnish your room. Nicer dorms = happier students!",
