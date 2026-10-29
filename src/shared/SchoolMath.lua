@@ -240,6 +240,9 @@ function SchoolMath.room(data, index, occupantUids, globalMult, ctx)
 	for _, d in ipairs(defs) do
 		-- parts explain the score on the satisfaction board
 		local parts = { base = Config.BaseSatisfaction, decor = decor, facilities = 0, vibe = 0, bonds = 0, friends = floorBonus, trait = 0 }
+		if data.buffs and (data.buffs[d.uid] or 0) > os.time() then
+			parts.friends += Config.OutingBuff.sat
+		end
 		parts.facilities = facilityBonus(data, d.def)
 		for _, other in ipairs(defs) do
 			if other.uid ~= d.uid then

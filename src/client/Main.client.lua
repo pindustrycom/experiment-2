@@ -670,6 +670,23 @@ function Render.students()
 			openPanel("students")
 		end, { Size = UDim2.fromOffset(130, 40) })
 	end
+	-- outings: who's out now, or send a group out yourself
+	if d.outing then
+		local act = Config.ActivityById[d.outing.activity]
+		local names = {}
+		for _, uid in ipairs(d.outing.members) do
+			local s = d.students[uid]
+			if s then
+				table.insert(names, string.match(Config.StudentById[s.id].name, "%S+$"))
+			end
+		end
+		UI.text(toolbar, string.format("%s At the %s: %s", act and act.emoji or "📷", act and act.name or "outing", table.concat(names, ", ")), 14, C.gold, { Size = UDim2.fromOffset(300, 40) })
+	else
+		local wait = (d.nextOuting or 0) - os.time()
+		UI.button(toolbar, wait > 0 and string.format("🎟 Outing in %d:%02d", wait // 60, wait % 60) or "🎟 Send on an outing", wait > 0 and Color3.fromRGB(110, 110, 120) or C.blue, function()
+			result(call("outing"))
+		end, { Size = UDim2.fromOffset(200, 40), TextSize = 15 })
+	end
 
 	if filter == "book" then
 		local found = 0

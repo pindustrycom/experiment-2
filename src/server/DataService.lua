@@ -52,6 +52,11 @@ function DataService.Default()
 		bonds = {}, -- [Config.BondKey(uidA, uidB)] = -50..100
 		houseGender = "Mixed", -- Mixed / Boys / Girls (see Config.HouseGenders)
 		livingItems = {}, -- [itemId] = true (living room)
+		outing = false, -- { activity, members, returnAt } while a group is out
+		nextOuting = 0, -- when the headmaster can send another group out
+		photos = {}, -- { id, a = activity, m = members, o = outcome, t = time }, oldest first
+		photoSeq = 0,
+		buffs = {}, -- [uid] = time a great-outing mood boost ends
 	}
 	data.layout.me = table.clone(House.Fixed.me)
 	data.layout.common = table.clone(House.Fixed.common)
@@ -85,6 +90,11 @@ local function reconcile(data)
 		local a, b = string.match(key, "^(.-)|(.*)$")
 		if not (a and data.students[a] and data.students[b]) then
 			data.bonds[key] = nil
+		end
+	end
+	for uid, untilTime in pairs(data.buffs) do
+		if not data.students[uid] or untilTime < os.time() then
+			data.buffs[uid] = nil
 		end
 	end
 	if not Config.HouseGenders[data.houseGender] then

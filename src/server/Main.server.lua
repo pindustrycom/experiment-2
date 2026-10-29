@@ -304,9 +304,155 @@ local function autoArrange(player, data)
 end
 
 ---------------------------------------------------------------------------
+-- Outings: a few students who get along go out and come back with a photo
+---------------------------------------------------------------------------
+local function shortName(def)
+	return string.match(def.name, "%S+$") or def.name
+end
+
+local function joinNames(names)
+	if #names <= 1 then
+		return names[1] or ""
+	end
+	return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
+end
+
+local function startOuting(player, data)
+	local housed = {}
+	for _, room in ipairs(data.rooms) do
+		for _, uid in ipairs(room.occupants) do
+			if data.students[uid] then
+				table.insert(housed, uid)
+			end
+		end
+	end
+	if #housed < 2 then
+		return false, "You need at least 2 housed students for an outing."
+	end
+	local function def(uid)
+		return Config.StudentById[data.students[uid].id]
+	end
+	local leader = housed[math.random(1, #housed)]
+	local candidates = {}
+	for _, uid in ipairs(housed) do
+		if uid ~= leader then
+			local score = SchoolMath.vibe(def(leader), def(uid)) + SchoolMath.bond(data, leader, uid) / 200 + math.random() * 0.15
+			table.insert(candidates, { uid = uid, score = score })
+		end
+	end
+	table.sort(candidates, function(a, b)
+		return a.score > b.score
+	end)
+	local members = { leader }
+	for i = 1, math.min(math.random(1, 3), #candidates) do
+		table.insert(members, candidates[i].uid)
+	end
+	-- activity: likelier when members have its tags
+	local weights, total = {}, 0
+	for i, act in ipairs(Config.Activities) do
+		local w = 1
+		for _, uid in ipairs(members) do
+			for _, t in ipairs(def(uid).tags) do
+				if table.find(act.tags, t) then
+					w += 2
+				end
+			end
+		end
+		weights[i] = w
+		total += w
+	end
+	local pick, activity = math.random() * total, Config.Activities[1]
+	for i, act in ipairs(Config.Activities) do
+		pick -= weights[i]
+		if pick <= 0 then
+			activity = act
+			break
+		end
+	end
+	data.outing = { activity = activity.id, members = members, returnAt = os.time() + math.random(Config.OutingTime[1], Config.OutingTime[2]) }
+	local names = {}
+	for _, uid in ipairs(members) do
+		table.insert(names, shortName(def(uid)))
+	end
+	notify(player, string.format("%s %s went to the %s!", activity.emoji, joinNames(names), activity.name), "info")
+	return true
+end
+
+local function finishOuting(player, data)
+	local outing = data.outing
+	data.outing = false
+	local activity = Config.ActivityById[outing.activity]
+	local members = {}
+	for _, uid in ipairs(outing.members) do
+		if data.students[uid] then
+			table.insert(members, uid)
+		end
+	end
+	if #members < 2 or not activity then
+		return
+	end
+	local defs = {}
+	for i, uid in ipairs(members) do
+		defs[i] = Config.StudentById[data.students[uid].id]
+	end
+	local sum, n, preferred = 0, 0, false
+	for a = 1, #members do
+		for _, t in ipairs(defs[a].tags) do
+			preferred = preferred or table.find(activity.tags, t) ~= nil
+		end
+		for b = a + 1, #members do
+			sum += SchoolMath.vibe(defs[a], defs[b])
+			n += 1
+		end
+	end
+	local v = sum / n
+	local great = math.clamp((v - 0.45) * 3, 0.05, 0.8) + (preferred and 0.1 or 0)
+	local awkward = math.clamp((0.55 - v) * 2, 0.05, 0.6)
+	local roll = math.random()
+	local outcome = roll < great and "great" or roll > 1 - awkward and "awkward" or "fun"
+	local info = Config.Outcomes[outcome]
+	local gain = info.bond * ((preferred and info.bond > 0) and 1.5 or 1)
+	for a = 1, #members do
+		for b = a + 1, #members do
+			local key = Config.BondKey(members[a], members[b])
+			data.bonds[key] = math.clamp((data.bonds[key] or 0) + gain, Config.BondMin, Config.BondMax)
+		end
+		if outcome == "great" then
+			data.buffs[members[a]] = os.time() + Config.OutingBuff.seconds
+		end
+	end
+	data.photoSeq += 1
+	table.insert(data.photos, { id = data.photoSeq, a = activity.id, m = members, o = outcome, t = os.time() })
+	while #data.photos > Config.PhotoKeep do
+		table.remove(data.photos, 1)
+	end
+	local names = {}
+	for _, d in ipairs(defs) do
+		table.insert(names, shortName(d))
+	end
+	notify(player, string.format("📸 %s are back from the %s: %s %s! New photo on their wall.", joinNames(names), activity.name, info.name, info.emoji), outcome == "awkward" and "error" or "cash")
+end
+
+---------------------------------------------------------------------------
 -- Actions
 ---------------------------------------------------------------------------
 local Actions = {}
+
+function Actions.outing(player, data)
+	if data.outing then
+		return { ok = false, err = "A group is already out!" }
+	end
+	local wait = data.nextOuting - os.time()
+	if wait > 0 then
+		return { ok = false, err = string.format("Next outing in %d:%02d", wait // 60, wait % 60) }
+	end
+	local ok, err = startOuting(player, data)
+	if not ok then
+		return { ok = false, err = err }
+	end
+	data.nextOuting = os.time() + Config.OutingCooldown
+	return { ok = true }
+end
 
 function Actions.pull(player, data, args)
 	local banner = Config.BannerById[args.banner]
@@ -850,6 +996,31 @@ local function tickBonds(data)
 		end
 	end
 end
+
+-- groups come back from outings, and new ones head out on their own
+task.spawn(function()
+	while true do
+		task.wait(5)
+		for player, s in pairs(session) do
+			local data = DataService.Get(player)
+			if data then
+				local now = os.time()
+				if data.outing and now >= data.outing.returnAt then
+					finishOuting(player, data)
+					pushState(player)
+				elseif not data.outing then
+					s.nextAutoOuting = s.nextAutoOuting or now + math.random(60, Config.OutingAutoEvery)
+					if now >= s.nextAutoOuting then
+						s.nextAutoOuting = now + math.random(Config.OutingAutoEvery * 0.6, Config.OutingAutoEvery * 1.4)
+						if startOuting(player, data) then
+							pushState(player)
+						end
+					end
+				end
+			end
+		end
+	end
+end)
 
 -- students who love the same living room item hang out there and bond a little
 local function tickHangouts(data)

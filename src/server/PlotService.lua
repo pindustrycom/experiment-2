@@ -1759,6 +1759,173 @@ local function buildBoards(plot, parent, info, data, totals)
 	end
 end
 
+---------------------------------------------------------------------------
+-- Outing photos: little framed pictures of the students who went out,
+-- rendered with a ViewportFrame, on the inside of each room's door wall.
+---------------------------------------------------------------------------
+local function seedOf(uid)
+	local seed = 0
+	for i = 1, #uid do
+		seed += string.byte(uid, i) * i
+	end
+	return seed
+end
+
+local function photoPerson(vp, uid, s, x, turned)
+	local def = Config.StudentById[s.id]
+	local seed = seedOf(uid)
+	local skin = def.skin or SKIN[(seed % #SKIN) + 1]
+	local hair = def.hair or HAIR[(seed // 3) % #HAIR + 1]
+	local shirt = def.shirt or Config.Looks[def.look].color
+	local base = CFrame.new(x, 0, 0) * CFrame.Angles(0, turned and math.pi / 2 or 0, 0)
+	local function bit(size, offset, color, shape)
+		local p = Instance.new("Part")
+		p.Anchored = true
+		p.Size = size
+		p.CFrame = base * offset
+		p.Color = color
+		p.Shape = shape or Enum.PartType.Block
+		p.Parent = vp
+		return p
+	end
+	bit(Vector3.new(1.6, 1.8, 0.9), CFrame.new(0, 0.9, 0), shirt)
+	bit(Vector3.new(0.5, 1.4, 0.5), CFrame.new(-1.05, 1.1, 0) * CFrame.Angles(0, 0, -0.5), skin)
+	bit(Vector3.new(0.5, 1.4, 0.5), CFrame.new(1.05, 1.1, 0) * CFrame.Angles(0, 0, 0.5), skin)
+	bit(Vector3.new(1.3, 1.3, 1.3), CFrame.new(0, 2.45, 0), skin, Enum.PartType.Ball)
+	bit(Vector3.new(1.4, 0.5, 1.4), CFrame.new(0, 2.95, 0.05), hair)
+	if def.gender == "F" then
+		bit(Vector3.new(1.4, 1.3, 0.3), CFrame.new(0, 2.3, 0.6), hair)
+	end
+	if not turned then
+		for _, ex in ipairs({ -0.22, 0.22 }) do
+			bit(Vector3.new(0.12, 0.18, 0.05), CFrame.new(ex, 2.55, -0.64), Color3.fromRGB(25, 20, 20))
+		end
+		bit(Vector3.new(0.45, 0.08, 0.05), CFrame.new(0, 2.2, -0.64), Color3.fromRGB(120, 40, 40))
+	end
+	if def.crew then
+		bit(Vector3.new(0.35, 0.35, 0.35), CFrame.new(0.5, 1.5, -0.5), Config.Tags.LaRose.color, Enum.PartType.Ball)
+	end
+end
+
+local function photoFrame(parent, cf, photo, data)
+	local activity = Config.ActivityById[photo.a]
+	local outcome = Config.Outcomes[photo.o] or Config.Outcomes.fun
+	local frame = part({ Name = "Photo", Size = Vector3.new(0.12, 1.3, 1.55), CFrame = cf, Color = Color3.fromRGB(60, 40, 28), Material = Enum.Material.Wood, CanCollide = false, Parent = parent })
+	local sg = surface(frame, Enum.NormalId.Right, Vector2.new(310, 260))
+	local paper = Instance.new("Frame")
+	paper.Size = UDim2.new(1, -16, 1, -16)
+	paper.Position = UDim2.fromOffset(8, 8)
+	paper.BackgroundColor3 = Color3.fromRGB(250, 248, 240)
+	paper.BorderSizePixel = 0
+	paper.Parent = sg
+	local vp = Instance.new("ViewportFrame")
+	vp.Size = UDim2.new(1, -16, 0.74, 0)
+	vp.Position = UDim2.fromOffset(8, 8)
+	vp.BackgroundColor3 = activity and activity.sky or Color3.fromRGB(120, 160, 220)
+	vp.BorderSizePixel = 0
+	vp.Ambient = Color3.fromRGB(200, 200, 200)
+	vp.LightColor = Color3.fromRGB(255, 245, 230)
+	vp.LightDirection = Vector3.new(-0.4, -1, -0.6)
+	vp.Parent = paper
+	local ground = Instance.new("Part")
+	ground.Anchored = true
+	ground.Size = Vector3.new(30, 0.5, 14)
+	ground.CFrame = CFrame.new(0, -0.25, 3)
+	ground.Color = activity and activity.ground or Color3.fromRGB(100, 170, 90)
+	ground.Parent = vp
+	local members = {}
+	for _, uid in ipairs(photo.m) do
+		if data.students[uid] then
+			table.insert(members, uid)
+		end
+	end
+	local gap = 2.3
+	for k, uid in ipairs(members) do
+		local x = (k - (#members + 1) / 2) * gap
+		photoPerson(vp, uid, data.students[uid], x, photo.o == "awkward" and k == #members)
+	end
+	local cam = Instance.new("Camera")
+	local width = math.max(#members, 2) * gap + 1.5
+	cam.FieldOfView = 40
+	cam.CFrame = CFrame.lookAt(Vector3.new(0, 2.2, -width * 1.25), Vector3.new(0, 1.7, 0))
+	cam.Parent = vp
+	vp.CurrentCamera = cam
+	CollectionService:AddTag(vp, "PhotoView")
+	local names = {}
+	for _, uid in ipairs(members) do
+		local def = Config.StudentById[data.students[uid].id]
+		table.insert(names, string.match(def.name, "%S+$") or def.name)
+	end
+	local cap = label(paper, string.format("%s %s %s", activity and activity.emoji or "📷", activity and activity.name or "Outing", outcome.emoji), Color3.fromRGB(50, 40, 40), UDim2.new(1, -8, 0.13, 0), UDim2.new(0, 4, 0.76, 0))
+	cap.TextStrokeTransparency = 1
+	local who = label(paper, table.concat(names, ", "), Color3.fromRGB(110, 100, 100), UDim2.new(1, -8, 0.1, 0), UDim2.new(0, 4, 0.89, 0))
+	who.TextStrokeTransparency = 1
+	return frame
+end
+
+local PHOTO_SLOTS = {} -- up to 8 frames: two rows, two columns each side of the door
+for _, y in ipairs({ 6.7, 4.8 }) do
+	for _, v in ipairs({ 3.9, -3.9, 5.8, -5.8 }) do
+		table.insert(PHOTO_SLOTS, { y = y, v = v })
+	end
+end
+
+local function renderPhotos(plot, data, folder)
+	local keep = {}
+	for i, room in ipairs(data.rooms) do
+		local info = plot.rooms["r" .. i]
+		if info then
+			local here = {}
+			for _, uid in ipairs(room.occupants) do
+				here[uid] = true
+			end
+			local list = {}
+			for k = #data.photos, 1, -1 do
+				local ph = data.photos[k]
+				for _, uid in ipairs(ph.m) do
+					if here[uid] then
+						table.insert(list, ph)
+						break
+					end
+				end
+				if #list >= Config.PhotoWall then
+					break
+				end
+			end
+			local ids = {}
+			for _, ph in ipairs(list) do
+				table.insert(ids, ph.id)
+			end
+			local sig = info.key .. "@" .. tostring(info.rcf.Position) .. ":" .. table.concat(ids, ",")
+			local name = "r" .. i
+			local wall = folder:FindFirstChild(name)
+			if wall and wall:GetAttribute("Sig") ~= sig then
+				wall:Destroy()
+				wall = nil
+			end
+			if not wall and #list > 0 then
+				wall = Instance.new("Model")
+				wall.Name = name
+				wall:SetAttribute("Sig", sig)
+				wall:SetAttribute("Level", info.floor)
+				for k, ph in ipairs(list) do
+					local slot = PHOTO_SLOTS[k]
+					photoFrame(wall, info.rcf * CFrame.new(0.5, slot.y, slot.v), ph, data)
+				end
+				wall.Parent = folder
+			end
+			if wall then
+				keep[name] = true
+			end
+		end
+	end
+	for _, c in ipairs(folder:GetChildren()) do
+		if not keep[c.Name] then
+			c:Destroy()
+		end
+	end
+end
+
 local function renderLive(plot, data, totals)
 	local live = plot.live
 	local students = live:FindFirstChild("Students")
@@ -1767,9 +1934,22 @@ local function renderLive(plot, data, totals)
 		students.Name = "Students"
 		students.Parent = live
 	end
+	local photos = live:FindFirstChild("Photos")
+	if not photos then
+		photos = Instance.new("Folder")
+		photos.Name = "Photos"
+		photos.Parent = live
+	end
 	for _, c in ipairs(live:GetChildren()) do
-		if c ~= students then
+		if c ~= students and c ~= photos then
 			c:Destroy()
+		end
+	end
+	-- students out on an outing aren't home
+	local away = {}
+	if data.outing then
+		for _, uid in ipairs(data.outing.members) do
+			away[uid] = true
 		end
 	end
 	local owner = plot.owner
@@ -1830,7 +2010,7 @@ local function renderLive(plot, data, totals)
 
 			for _, uid in ipairs(room.occupants) do
 				local s = data.students[uid]
-				if s then
+				if s and not away[uid] then
 					local st = stats and stats.students[uid]
 					local satv = st and st.sat or 50
 					local m = students:FindFirstChild(uid)
@@ -1860,6 +2040,8 @@ local function renderLive(plot, data, totals)
 			m:Destroy()
 		end
 	end
+
+	renderPhotos(plot, data, photos)
 
 	-- plates for the special rooms
 	for key, info in pairs(plot.rooms) do

@@ -218,6 +218,21 @@ local function decide(st, model)
 	st.queue = { randomPoint(st.area) }
 end
 
+-- outing photos: point each ViewportFrame at its own camera (the property
+-- doesn't always survive replication)
+local function fixPhoto(vp)
+	task.defer(function()
+		local cam = vp:FindFirstChildOfClass("Camera") or vp:WaitForChild("Camera", 5)
+		if cam and vp:IsA("ViewportFrame") then
+			vp.CurrentCamera = cam
+		end
+	end)
+end
+CollectionService:GetInstanceAddedSignal("PhotoView"):Connect(fixPhoto)
+for _, vp in ipairs(CollectionService:GetTagged("PhotoView")) do
+	fixPhoto(vp)
+end
+
 CollectionService:GetInstanceAddedSignal("Student"):Connect(function(m)
 	task.defer(add, m)
 end)

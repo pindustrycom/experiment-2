@@ -235,6 +235,34 @@ function Config.BondKey(a, b)
 	return b .. "|" .. a
 end
 
+-- Outings: a group of students who get along goes out, comes back with a
+-- photo for their walls. Preferred tags make an activity likelier and better.
+Config.Activities = {
+	{ id = "movies", name = "Movies", emoji = "🎬", tags = { "Funny", "Sleepy", "Gamer", "Nerd" }, sky = Color3.fromRGB(40, 30, 60), ground = Color3.fromRGB(150, 30, 40) },
+	{ id = "park", name = "Park", emoji = "🌳", tags = { "Carefree", "Jock", "Artistic", "Normal" }, sky = Color3.fromRGB(150, 205, 250), ground = Color3.fromRGB(90, 170, 80) },
+	{ id = "party", name = "Party", emoji = "🎉", tags = { "Chad", "Alpha", "Charismatic", "Funny" }, sky = Color3.fromRGB(80, 30, 120), ground = Color3.fromRGB(240, 80, 180) },
+	{ id = "beach", name = "Beach", emoji = "🏖", tags = { "Carefree", "Chad", "Jock", "Sleepy" }, sky = Color3.fromRGB(120, 200, 250), ground = Color3.fromRGB(240, 220, 160) },
+	{ id = "arcade", name = "Arcade", emoji = "🕹", tags = { "Gamer", "Nerd", "Funny", "Chud" }, sky = Color3.fromRGB(20, 20, 40), ground = Color3.fromRGB(60, 220, 220) },
+	{ id = "concert", name = "Concert", emoji = "🎤", tags = { "Musician", "Indie", "Charismatic", "LaRose" }, sky = Color3.fromRGB(20, 10, 30), ground = Color3.fromRGB(255, 120, 40) },
+	{ id = "mall", name = "Mall", emoji = "🛍", tags = { "RichKid", "Charismatic", "Artistic" }, sky = Color3.fromRGB(250, 235, 220), ground = Color3.fromRGB(200, 190, 200) },
+	{ id = "bowling", name = "Bowling", emoji = "🎳", tags = { "Normal", "Jock", "Funny", "Bully" }, sky = Color3.fromRGB(60, 40, 90), ground = Color3.fromRGB(210, 170, 110) },
+}
+Config.ActivityById = {}
+for _, a in ipairs(Config.Activities) do
+	Config.ActivityById[a.id] = a
+end
+Config.Outcomes = {
+	great = { name = "Great time", emoji = "🤩", bond = 15 },
+	fun = { name = "Fun", emoji = "😄", bond = 6 },
+	awkward = { name = "Awkward", emoji = "😬", bond = -8 },
+}
+Config.OutingAutoEvery = 300 -- seconds between outings on their own (on average)
+Config.OutingTime = { 150, 240 } -- seconds they're away
+Config.OutingCooldown = 480 -- after sending a group out yourself
+Config.OutingBuff = { sat = 10, seconds = 1800 } -- after a great time
+Config.PhotoWall = 8 -- photos shown per room
+Config.PhotoKeep = 80 -- photos kept in the save
+
 -- House rule set on the floor plans board
 Config.HouseGenders = { Mixed = "👫 Mixed", Boys = "👦 Boys only", Girls = "👧 Girls only" }
 
