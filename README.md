@@ -26,6 +26,10 @@ Progress doesn't save in Studio until you complete the publishing steps below. U
 
 ## Editing with Rojo (optional, for coders)
 
+**Lighting:** the game looks best with **Lighting > Technology = Future**. Scripts can't set that property, so if you work with `rojo serve`, set it once by hand in Studio (select Lighting in the Explorer, change Technology in Properties, save the place). `rojo build` sets it for you.
+
+**Students** use real Roblox R15 avatar bodies (with hair and personality accessories built in code) and Roblox's default walk/idle animations. That needs Roblox's avatar service, which works in Studio when you're online; if it's unavailable the game falls back to block students.
+
 The `src/` folder plus `default.project.json` is a standard Rojo 7 project.
 
 ```

@@ -7,6 +7,7 @@
 -- plaza), +X is the right side when you walk in through the front door.
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local SchoolMath = require(ReplicatedStorage.Shared.SchoolMath)
@@ -122,7 +123,11 @@ local function prompt(parent, action, object, dist)
 end
 
 -- A wall along the local X axis of `frame`, from x=a0 to a1, heights h0..h1,
--- thickness along local Z. holes = { { c, w, b, t, glass } } in the same axes.
+-- thickness along local Z. holes = { { c, w, b, t, glass, out } } in the same
+-- axes; `out` (+1/-1, local Z) marks the outside face for sills and shutters.
+local TRIM = Color3.fromRGB(245, 240, 228)
+local SHUTTER = Color3.fromRGB(60, 95, 80)
+
 local function wall(parent, frame, a0, a1, h0, h1, thick, props, holes)
 	holes = holes or {}
 	table.sort(holes, function(x, y)
@@ -145,7 +150,23 @@ local function wall(parent, frame, a0, a1, h0, h1, thick, props, holes)
 		piece(l, r, h0, h.b)
 		piece(l, r, h.t, h1)
 		if h.glass then
-			part({ Name = "Window", Size = Vector3.new(h.w, h.t - h.b, 0.15), CFrame = frame * CFrame.new(h.c, (h.b + h.t) / 2, 0), Color = Color3.fromRGB(180, 225, 255), Material = Enum.Material.Glass, Transparency = 0.6, Parent = parent })
+			local mid = (h.b + h.t) / 2
+			part({ Name = "Window", Size = Vector3.new(h.w, h.t - h.b, 0.15), CFrame = frame * CFrame.new(h.c, mid, 0), Color = Color3.fromRGB(180, 225, 255), Material = Enum.Material.Glass, Transparency = 0.6, Reflectance = 0.2, Parent = parent })
+			-- window bars: one cross through the middle
+			local bar = { Name = "Mullion", Color = TRIM, CanCollide = false, Parent = parent }
+			bar.Size, bar.CFrame = Vector3.new(0.18, h.t - h.b, 0.25), frame * CFrame.new(h.c, mid, 0)
+			part(table.clone(bar))
+			bar.Size = Vector3.new(h.w, 0.18, 0.25)
+			part(bar)
+		end
+		if h.out then
+			-- outside trim: sill, lintel and shutters
+			local o = h.out
+			part({ Name = "Sill", Size = Vector3.new(h.w + 0.8, 0.3, 0.7), CFrame = frame * CFrame.new(h.c, h.b - 0.15, o * (thick / 2 + 0.25)), Color = TRIM, Parent = parent })
+			part({ Name = "Lintel", Size = Vector3.new(h.w + 0.6, 0.45, 0.4), CFrame = frame * CFrame.new(h.c, h.t + 0.22, o * (thick / 2 + 0.15)), Color = TRIM, Parent = parent })
+			for _, sgn in ipairs({ -1, 1 }) do
+				part({ Name = "Shutter", Size = Vector3.new(1.1, h.t - h.b, 0.15), CFrame = frame * CFrame.new(h.c + sgn * (h.w / 2 + 0.65), (h.b + h.t) / 2, o * (thick / 2 + 0.1)), Color = SHUTTER, Material = Enum.Material.WoodPlanks, CanCollide = false, Parent = parent })
+			end
 		end
 		x = r
 	end
@@ -158,10 +179,82 @@ local ALONG_Z = CFrame.Angles(0, -math.pi / 2, 0)
 ---------------------------------------------------------------------------
 -- World
 ---------------------------------------------------------------------------
+-- Soft sky, bloom and warm color grading. Lighting.Technology can't be set
+-- from a script; default.project.json sets it to Future for built places.
+local function setupLighting()
+	local Lighting = game:GetService("Lighting")
+	Lighting.ClockTime = 15.2
+	Lighting.Brightness = 2.2
+	Lighting.Ambient = Color3.fromRGB(70, 70, 80)
+	Lighting.OutdoorAmbient = Color3.fromRGB(135, 135, 150)
+	Lighting.EnvironmentDiffuseScale = 1
+	Lighting.EnvironmentSpecularScale = 1
+	Lighting.GlobalShadows = true
+	Lighting.ShadowSoftness = 0.25
+	local function effect(class, props)
+		local e = Lighting:FindFirstChildOfClass(class) or Instance.new(class)
+		for k, v in pairs(props) do
+			e[k] = v
+		end
+		e.Parent = Lighting
+	end
+	effect("Atmosphere", { Density = 0.3, Offset = 0.25, Color = Color3.fromRGB(200, 215, 235), Decay = Color3.fromRGB(110, 120, 140), Glare = 0.4, Haze = 1.2 })
+	effect("BloomEffect", { Intensity = 0.6, Size = 28, Threshold = 1.6 })
+	effect("SunRaysEffect", { Intensity = 0.06, Spread = 0.8 })
+	effect("ColorCorrectionEffect", { Brightness = 0.02, Contrast = 0.08, Saturation = 0.12, TintColor = Color3.fromRGB(255, 248, 240) })
+end
+
+local function buildPlazaDecor(world)
+	local stone = Color3.fromRGB(215, 210, 200)
+	-- fountain
+	part({ Name = "FountainBasin", Shape = Enum.PartType.Cylinder, Size = Vector3.new(1.6, 16, 16), CFrame = CFrame.new(0, 1.2, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = stone, Material = Enum.Material.Marble, Parent = world })
+	part({ Name = "FountainWater", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.2, 14.4, 14.4), CFrame = CFrame.new(0, 1.95, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(70, 160, 230), Material = Enum.Material.Glass, Transparency = 0.25, Reflectance = 0.2, Parent = world })
+	part({ Name = "FountainPillar", Shape = Enum.PartType.Cylinder, Size = Vector3.new(5, 1.6, 1.6), CFrame = CFrame.new(0, 4, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = stone, Material = Enum.Material.Marble, Parent = world })
+	local bowl = part({ Name = "FountainBowl", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.8, 6, 6), CFrame = CFrame.new(0, 6.6, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = stone, Material = Enum.Material.Marble, Parent = world })
+	local spray = Instance.new("ParticleEmitter")
+	spray.Color = ColorSequence.new(Color3.fromRGB(200, 230, 255))
+	spray.Size = NumberSequence.new(0.5, 0.1)
+	spray.Transparency = NumberSequence.new(0.3, 1)
+	spray.Rate = 40
+	spray.Lifetime = NumberRange.new(0.8, 1.2)
+	spray.Speed = NumberRange.new(6, 8)
+	spray.SpreadAngle = Vector2.new(20, 20)
+	spray.Acceleration = Vector3.new(0, -20, 0)
+	spray.EmissionDirection = Enum.NormalId.Right -- the bowl's local X points up
+	spray.Parent = bowl
+	-- benches and lamp posts around the plaza
+	for i = 0, 3 do
+		local a = i * math.pi / 2 + math.pi / 4
+		local pos = Vector3.new(math.cos(a) * 30, 0, math.sin(a) * 30)
+		local cf = CFrame.lookAt(pos, Vector3.zero)
+		part({ Name = "BenchSeat", Size = Vector3.new(6, 0.4, 1.8), CFrame = cf * CFrame.new(0, 1.9, 0), Color = Color3.fromRGB(150, 100, 60), Material = Enum.Material.WoodPlanks, Parent = world })
+		part({ Name = "BenchBack", Size = Vector3.new(6, 1.6, 0.3), CFrame = cf * CFrame.new(0, 3, 0.9) * CFrame.Angles(-0.15, 0, 0), Color = Color3.fromRGB(150, 100, 60), Material = Enum.Material.WoodPlanks, Parent = world })
+		for _, x in ipairs({ -2.6, 2.6 }) do
+			part({ Name = "BenchLeg", Size = Vector3.new(0.3, 1.5, 1.6), CFrame = cf * CFrame.new(x, 1.15, 0), Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal, Parent = world })
+		end
+		local lp = Vector3.new(math.cos(a) * 52, 0, math.sin(a) * 52)
+		part({ Name = "LampPost", Shape = Enum.PartType.Cylinder, Size = Vector3.new(10, 0.5, 0.5), CFrame = CFrame.new(lp + Vector3.new(0, 5.4, 0)) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal, Parent = world })
+		local globe = part({ Name = "LampGlobe", Shape = Enum.PartType.Ball, Size = Vector3.new(1.4, 1.4, 1.4), CFrame = CFrame.new(lp + Vector3.new(0, 10.9, 0)), Color = Color3.fromRGB(255, 235, 190), Material = Enum.Material.Neon, Parent = world })
+		local l = Instance.new("PointLight")
+		l.Range = 20
+		l.Brightness = 1
+		l.Color = Color3.fromRGB(255, 220, 170)
+		l.Parent = globe
+	end
+	-- low hedges along the plaza edge, with gaps for the paths
+	for _, sd in ipairs({ -1, 1 }) do
+		for _, half in ipairs({ -1, 1 }) do
+			part({ Name = "Hedge", Size = Vector3.new(2.4, 2.4, 44), CFrame = CFrame.new(sd * 59, 1.6, half * 32), Color = Color3.fromRGB(70, 140, 70), Material = Enum.Material.Grass, Parent = world })
+		end
+	end
+end
+
 function PlotService.BuildWorld()
+	setupLighting()
 	local world = Instance.new("Folder")
 	world.Name = "BSTWorld"
 	world.Parent = workspace
+	buildPlazaDecor(world)
 
 	if not workspace:FindFirstChild("Baseplate") then
 		part({
@@ -354,10 +447,30 @@ function PlotService.RenderEmpty(plot)
 	buildSign(plot, plot.live, "🏠 Empty Lot", "Waiting for a new headmaster...")
 end
 
+-- cf: bed center on the floor, pillow end toward local +Z. `color` is the blanket.
+local BED_WOOD = Color3.fromRGB(120, 82, 55)
 local function bed(parent, cf, color)
-	part({ Name = "BedFrame", Size = Vector3.new(3.6, 1.2, 7), CFrame = cf * CFrame.new(0, 0.6, 0), Color = Color3.fromRGB(110, 75, 50), Material = Enum.Material.Wood, Parent = parent })
-	part({ Name = "Mattress", Size = Vector3.new(3.2, 0.6, 6.6), CFrame = cf * CFrame.new(0, 1.5, 0), Color = color, Material = Enum.Material.Fabric, Parent = parent })
-	part({ Name = "Pillow", Size = Vector3.new(2.6, 0.5, 1.4), CFrame = cf * CFrame.new(0, 2, 2.4), Color = Color3.new(1, 1, 1), Material = Enum.Material.Fabric, Parent = parent })
+	local wood = { Color = BED_WOOD, Material = Enum.Material.Wood, Parent = parent }
+	local function piece(name, size, offset, props)
+		local p = table.clone(props or wood)
+		p.Name, p.Size, p.CFrame = name, size, cf * offset
+		return part(p)
+	end
+	for _, x in ipairs({ -1.6, 1.6 }) do
+		for _, z in ipairs({ -3.3, 3.3 }) do
+			piece("Leg", Vector3.new(0.3, 0.5, 0.3), CFrame.new(x, 0.25, z))
+		end
+	end
+	piece("BedFrame", Vector3.new(3.6, 0.5, 7), CFrame.new(0, 0.75, 0))
+	piece("Headboard", Vector3.new(3.8, 2.6, 0.3), CFrame.new(0, 1.8, 3.55))
+	piece("HeadboardCap", Vector3.new(4, 0.25, 0.45), CFrame.new(0, 3.2, 3.55))
+	piece("Footboard", Vector3.new(3.8, 1.5, 0.3), CFrame.new(0, 1.25, -3.55))
+	piece("Mattress", Vector3.new(3.3, 0.55, 6.7), CFrame.new(0, 1.27, 0), { Color = Color3.fromRGB(245, 245, 240), Material = Enum.Material.Fabric, Parent = parent })
+	piece("Blanket", Vector3.new(3.45, 0.2, 4.6), CFrame.new(0, 1.62, -1), { Color = color, Material = Enum.Material.Fabric, Parent = parent })
+	piece("BlanketSide", Vector3.new(0.1, 0.55, 4.6), CFrame.new(1.72, 1.35, -1), { Color = color, Material = Enum.Material.Fabric, Parent = parent })
+	piece("BlanketSide", Vector3.new(0.1, 0.55, 4.6), CFrame.new(-1.72, 1.35, -1), { Color = color, Material = Enum.Material.Fabric, Parent = parent })
+	piece("Fold", Vector3.new(3.5, 0.28, 0.6), CFrame.new(0, 1.7, 1.3), { Color = Color3.fromRGB(250, 250, 250), Material = Enum.Material.Fabric, Parent = parent })
+	piece("Pillow", Vector3.new(2.6, 0.5, 1.2), CFrame.new(0, 1.75, 2.6), { Color = Color3.new(1, 1, 1), Material = Enum.Material.Fabric, Parent = parent })
 end
 
 local SKIN = {
@@ -368,7 +481,186 @@ local SKIN = {
 	Color3.fromRGB(100, 70, 50),
 }
 
+local HAIR = { Color3.fromRGB(30, 25, 25), Color3.fromRGB(90, 55, 30), Color3.fromRGB(230, 190, 110), Color3.fromRGB(170, 70, 40), Color3.fromRGB(60, 40, 30) }
+local PANTS = { Color3.fromRGB(50, 70, 120), Color3.fromRGB(35, 35, 45), Color3.fromRGB(170, 150, 110), Color3.fromRGB(80, 80, 90) }
+
+-- One R15 avatar rig, cloned for every student. Needs Roblox's avatar
+-- service (works in Studio when you're online); falls back to block people.
+local avatarTemplate, rootAboveFeet
+local function getAvatarTemplate()
+	if avatarTemplate == nil then
+		local ok, model = pcall(function()
+			return Players:CreateHumanoidModelFromDescription(Instance.new("HumanoidDescription"), Enum.HumanoidRigType.R15)
+		end)
+		if ok and model and model:FindFirstChild("HumanoidRootPart") then
+			for _, d in ipairs(model:GetDescendants()) do
+				if d:IsA("BasePart") then
+					d.CanCollide = false
+					d.CanQuery = false
+					d.CanTouch = false
+					d.Massless = true
+				elseif d:IsA("LuaSourceContainer") then
+					d:Destroy()
+				end
+			end
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+			hum.EvaluateStateMachine = false
+			hum.BreakJointsOnDeath = false
+			model.HumanoidRootPart.Anchored = true
+			model.PrimaryPart = model.HumanoidRootPart
+			model:PivotTo(CFrame.new())
+			local bbCF, bbSize = model:GetBoundingBox()
+			rootAboveFeet = model.HumanoidRootPart.Position.Y - (bbCF.Position.Y - bbSize.Y / 2)
+			avatarTemplate = model
+		else
+			warn("[BST] avatar rigs unavailable, using block students:", model)
+			avatarTemplate = false
+		end
+	end
+	return avatarTemplate or nil
+end
+
+local function weldTo(base, p)
+	p.Anchored = false
+	p.CanCollide = false
+	p.CanQuery = false
+	p.Massless = true
+	local w = Instance.new("WeldConstraint")
+	w.Part0 = base
+	w.Part1 = p
+	w.Parent = p
+	return p
+end
+
+local function finishStudent(m, uid, student, head, root)
+	local def = Config.StudentById[student.id]
+	local rarity = Config.Rarities[def.rarity]
+	local pers = Config.Personalities[def.personality]
+	if rarity.rank >= 5 then
+		local light = Instance.new("PointLight")
+		light.Color = rarity.color
+		light.Range = 10
+		light.Brightness = 2
+		light.Parent = root
+		local aura = Instance.new("ParticleEmitter")
+		aura.Color = ColorSequence.new(rarity.color)
+		aura.LightEmission = 1
+		aura.Size = NumberSequence.new(0.3, 0)
+		aura.Rate = 8
+		aura.Lifetime = NumberRange.new(1, 1.5)
+		aura.Speed = NumberRange.new(1, 2)
+		aura.SpreadAngle = Vector2.new(180, 180)
+		aura.Parent = root
+	end
+	if student.shiny then
+		local sp = Instance.new("Sparkles")
+		sp.SparkleColor = Color3.fromRGB(255, 255, 180)
+		sp.Parent = head
+	end
+	local bb = billboard(head, UDim2.fromOffset(160, 44), Vector3.new(0, 2.2, 0), 60)
+	label(bb, (student.shiny and "✨" or "") .. def.name, Color3.new(1, 1, 1), UDim2.fromScale(1, 0.55))
+	local r = label(bb, pers.emoji .. " " .. def.rarity, rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
+	r.Name = "RarityLabel"
+	m:SetAttribute("StudentUid", uid)
+	CollectionService:AddTag(m, "Student")
+	return m
+end
+
+local function buildAvatarStudent(template, uid, student, cf, skin, seed)
+	local def = Config.StudentById[student.id]
+	local pers = Config.Personalities[def.personality]
+	local m = template:Clone()
+	m.Name = def.name
+	local shirt = pers.color
+	local pants = PANTS[(seed % #PANTS) + 1]
+	local shoes = (seed % 3 == 0) and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(30, 30, 35)
+	local colors = {
+		Head = skin, UpperTorso = shirt, LowerTorso = pants,
+		LeftUpperArm = shirt, RightUpperArm = shirt, LeftLowerArm = skin, RightLowerArm = skin, LeftHand = skin, RightHand = skin,
+		LeftUpperLeg = pants, RightUpperLeg = pants, LeftLowerLeg = pants, RightLowerLeg = pants, LeftFoot = shoes, RightFoot = shoes,
+	}
+	local bodyColors = m:FindFirstChildOfClass("BodyColors")
+	if bodyColors then
+		bodyColors:Destroy()
+	end
+	for name, color in pairs(colors) do
+		local p = m:FindFirstChild(name)
+		if p and p:IsA("BasePart") then
+			p.Color = color
+			p.Material = (p.Name == "UpperTorso" or p.Name:find("UpperArm")) and Enum.Material.Fabric or Enum.Material.SmoothPlastic
+		end
+	end
+	local head = m:FindFirstChild("Head")
+	local torso = m:FindFirstChild("UpperTorso")
+	local hs = head.Size
+	-- hair: a cap over the top and back of the head
+	local hairColor = HAIR[(seed // 3) % #HAIR + 1]
+	local hair = { Name = "Hair", Color = hairColor, Material = Enum.Material.Fabric, Parent = m }
+	hair.Size = Vector3.new(hs.X * 1.08, hs.Y * 0.32, hs.Z * 1.08)
+	hair.CFrame = head.CFrame * CFrame.new(0, hs.Y * 0.4, 0.02)
+	weldTo(head, part(hair))
+	local back = table.clone(hair)
+	back.Size = Vector3.new(hs.X * 1.08, hs.Y * 0.7, hs.Z * 0.2)
+	back.CFrame = head.CFrame * CFrame.new(0, hs.Y * 0.12, hs.Z * 0.48)
+	weldTo(head, part(back))
+	if seed % 2 == 0 then
+		local fringe = table.clone(hair)
+		fringe.Size = Vector3.new(hs.X * 0.9, hs.Y * 0.14, hs.Z * 0.12)
+		fringe.CFrame = head.CFrame * CFrame.new(-hs.X * 0.05, hs.Y * 0.3, -hs.Z * 0.5)
+		weldTo(head, part(fringe))
+	end
+	-- personality accessories
+	local function acc(name, size, offset, color, material, base)
+		base = base or head
+		return weldTo(base, part({ Name = name, Size = size, CFrame = base.CFrame * offset, Color = color, Material = material or Enum.Material.SmoothPlastic, Parent = m }))
+	end
+	if def.personality == "Royal" then
+		acc("Crown", Vector3.new(hs.X * 0.85, 0.35, hs.Z * 0.85), CFrame.new(0, hs.Y * 0.7, 0), Color3.fromRGB(255, 210, 60), Enum.Material.Foil)
+		for i = 0, 3 do
+			acc("CrownPoint", Vector3.new(0.18, 0.3, 0.18), CFrame.new(0, hs.Y * 0.7 + 0.3, 0) * CFrame.Angles(0, i * math.pi / 2, 0) * CFrame.new(0, 0, hs.Z * 0.38), Color3.fromRGB(255, 210, 60), Enum.Material.Foil)
+		end
+	elseif def.personality == "Nerd" then
+		for _, x in ipairs({ -0.25, 0.25 }) do
+			acc("Lens", Vector3.new(0.34, 0.3, 0.06), CFrame.new(x * hs.X, hs.Y * 0.08, -hs.Z * 0.53), Color3.fromRGB(200, 230, 255), Enum.Material.Glass).Transparency = 0.4
+		end
+		acc("Bridge", Vector3.new(hs.X * 0.9, 0.06, 0.06), CFrame.new(0, hs.Y * 0.12, -hs.Z * 0.55), Color3.fromRGB(20, 20, 20))
+	elseif def.personality == "Musician" then
+		acc("GuitarBody", Vector3.new(1.1, 1.3, 0.3), CFrame.new(0.2, -0.3, torso.Size.Z / 2 + 0.25) * CFrame.Angles(0, 0, 0.5), Color3.fromRGB(180, 60, 40), Enum.Material.Wood, torso)
+		acc("GuitarNeck", Vector3.new(0.18, 1.6, 0.12), CFrame.new(-0.45, 0.75, torso.Size.Z / 2 + 0.25) * CFrame.Angles(0, 0, 0.5), Color3.fromRGB(60, 35, 20), Enum.Material.Wood, torso)
+	elseif def.personality == "Jock" then
+		acc("Cap", Vector3.new(hs.X * 1.1, 0.35, hs.Z * 1.1), CFrame.new(0, hs.Y * 0.55, 0), Color3.fromRGB(220, 50, 50), Enum.Material.Fabric)
+		acc("Brim", Vector3.new(hs.X * 0.95, 0.08, 0.55), CFrame.new(0, hs.Y * 0.42, -hs.Z * 0.75), Color3.fromRGB(220, 50, 50), Enum.Material.Fabric)
+	elseif def.personality == "Gamer" then
+		acc("Headset", Vector3.new(hs.X * 1.15, 0.12, 0.3), CFrame.new(0, hs.Y * 0.55, 0), Color3.fromRGB(30, 30, 35))
+		for _, x in ipairs({ -1, 1 }) do
+			acc("Ear", Vector3.new(0.18, 0.5, 0.45), CFrame.new(x * hs.X * 0.56, 0, 0), Color3.fromRGB(40, 220, 200), Enum.Material.Neon)
+		end
+	elseif def.personality == "Artist" then
+		acc("Beret", Vector3.new(hs.X * 1.1, 0.25, hs.Z * 1.1), CFrame.new(0.12, hs.Y * 0.62, 0) * CFrame.Angles(0, 0, -0.2), Color3.fromRGB(150, 30, 60), Enum.Material.Fabric)
+	elseif def.personality == "Rebel" then
+		acc("Shades", Vector3.new(hs.X * 0.95, 0.24, 0.08), CFrame.new(0, hs.Y * 0.1, -hs.Z * 0.54), Color3.fromRGB(15, 15, 15), Enum.Material.Glass)
+		acc("Jacket", Vector3.new(torso.Size.X * 1.06, torso.Size.Y * 0.95, torso.Size.Z * 1.08), CFrame.new(0, 0, 0), Color3.fromRGB(30, 30, 35), Enum.Material.Leather, torso).Transparency = 0
+	elseif def.personality == "Prankster" then
+		acc("Propeller", Vector3.new(hs.X * 0.9, 0.25, hs.Z * 0.9), CFrame.new(0, hs.Y * 0.6, 0), Color3.fromRGB(255, 200, 50), Enum.Material.Fabric)
+		acc("Blade", Vector3.new(1.4, 0.05, 0.22), CFrame.new(0, hs.Y * 0.6 + 0.3, 0), Color3.fromRGB(240, 70, 70))
+	end
+	local root = m.HumanoidRootPart
+	m:PivotTo(cf * CFrame.new(0, rootAboveFeet, 0))
+	m:SetAttribute("Rig", "R15")
+	return finishStudent(m, uid, student, head, root)
+end
+
 function PlotService.BuildStudentModel(uid, student, cf)
+	local seed0 = 0
+	for i = 1, #uid do
+		seed0 += string.byte(uid, i) * i
+	end
+	local template = getAvatarTemplate()
+	if template then
+		return buildAvatarStudent(template, uid, student, cf, SKIN[(seed0 % #SKIN) + 1], seed0)
+	end
 	local def = Config.StudentById[student.id]
 	local rarity = Config.Rarities[def.rarity]
 	local pers = Config.Personalities[def.personality]
@@ -413,37 +705,7 @@ function PlotService.BuildStudentModel(uid, student, cf)
 		limb("Cap", Vector3.new(1.4, 0.4, 1.6), CFrame.new(0, 2.4, -0.2), Color3.fromRGB(220, 50, 50))
 	end
 
-	local rank = rarity.rank
-	if rank >= 5 then
-		local light = Instance.new("PointLight")
-		light.Color = rarity.color
-		light.Range = 10
-		light.Brightness = 2
-		light.Parent = root
-		local aura = Instance.new("ParticleEmitter")
-		aura.Color = ColorSequence.new(rarity.color)
-		aura.LightEmission = 1
-		aura.Size = NumberSequence.new(0.3, 0)
-		aura.Rate = 8
-		aura.Lifetime = NumberRange.new(1, 1.5)
-		aura.Speed = NumberRange.new(1, 2)
-		aura.SpreadAngle = Vector2.new(180, 180)
-		aura.Parent = root
-	end
-	if student.shiny then
-		local sp = Instance.new("Sparkles")
-		sp.SparkleColor = Color3.fromRGB(255, 255, 180)
-		sp.Parent = head
-	end
-
-	local bb = billboard(head, UDim2.fromOffset(160, 44), Vector3.new(0, 2.2, 0), 60)
-	label(bb, (student.shiny and "✨" or "") .. def.name, Color3.new(1, 1, 1), UDim2.fromScale(1, 0.55))
-	local r = label(bb, pers.emoji .. " " .. def.rarity, rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
-	r.Name = "RarityLabel"
-
-	m:SetAttribute("StudentUid", uid)
-	CollectionService:AddTag(m, "Student")
-	return m
+	return finishStudent(m, uid, student, head, root)
 end
 
 ---------------------------------------------------------------------------
@@ -492,11 +754,17 @@ function FacilityProps.cafeteria(m, r)
 	for i, c in ipairs({ Color3.fromRGB(255, 80, 60), Color3.fromRGB(255, 200, 60), Color3.fromRGB(120, 220, 90), Color3.fromRGB(255, 150, 200) }) do
 		prop(m, r, ROOM_U - 1.4, 3.8, -6 + i * 2.4, Vector3.new(1.2, 0.6, 1.2), c, { Material = Enum.Material.Neon })
 	end
-	for _, u in ipairs({ 5.5, 11 }) do
+	for _, u in ipairs({ 6, 11.5 }) do
 		prop(m, r, u, 2.6, 0, Vector3.new(3, 0.3, 8), Color3.fromRGB(240, 240, 240))
-		prop(m, r, u, 1.25, 0, Vector3.new(0.6, 2.5, 0.6), DARK)
+		for _, dv in ipairs({ -3.4, 3.4 }) do
+			prop(m, r, u, 1.25, dv, Vector3.new(0.4, 2.5, 0.4), DARK)
+		end
 		for _, side in ipairs({ -1, 1 }) do
 			prop(m, r, u + side * 2.2, 1, 0, Vector3.new(1, 0.4, 8), WOOD, { Material = Enum.Material.Wood })
+		end
+		for k = -1, 1 do
+			prop(m, r, u + 0.6, 2.85, k * 2.6, Vector3.new(0.12, 0.9, 0.9), Color3.fromRGB(255, 255, 255), { Shape = Enum.PartType.Cylinder, Rot = UPRIGHT, CanCollide = false })
+			prop(m, r, u - 0.6, 2.85, k * 2.6 + 1, Vector3.new(0.12, 0.9, 0.9), Color3.fromRGB(255, 255, 255), { Shape = Enum.PartType.Cylinder, Rot = UPRIGHT, CanCollide = false })
 		end
 	end
 end
@@ -600,9 +868,28 @@ local function commonProps(m, r)
 	prop(m, r, ROOM_U - 0.6, 4.4, 0, Vector3.new(0.3, 3.2, 6), DARK)
 	prop(m, r, ROOM_U - 0.8, 4.4, 0, Vector3.new(0.05, 2.8, 5.6), Color3.fromRGB(90, 160, 255), { Material = Enum.Material.Neon })
 	local sofa = Color3.fromRGB(90, 130, 200)
-	prop(m, r, 8.5, 0.9, 0, Vector3.new(2.6, 1.4, 8), sofa, { Material = Enum.Material.Fabric })
-	prop(m, r, 7.4, 2.2, 0, Vector3.new(0.8, 2, 8), sofa, { Material = Enum.Material.Fabric })
-	prop(m, r, 12.5, 1.1, 0, Vector3.new(2.2, 0.3, 4), WOOD, { Material = Enum.Material.Wood })
+	local fabric = { Material = Enum.Material.Fabric }
+	prop(m, r, 8.5, 0.7, 0, Vector3.new(2.6, 1, 8), sofa, fabric)
+	for _, dv in ipairs({ -2, 2 }) do
+		prop(m, r, 8.7, 1.35, dv, Vector3.new(2.2, 0.45, 3.8), sofa:Lerp(Color3.new(1, 1, 1), 0.15), fabric) -- seat cushions
+		prop(m, r, 7.65, 2.4, dv, Vector3.new(0.6, 1.6, 3.7), sofa:Lerp(Color3.new(1, 1, 1), 0.1), fabric) -- back cushions
+	end
+	prop(m, r, 7.4, 2.1, 0, Vector3.new(0.6, 2.2, 8), sofa, fabric)
+	for _, sgn in ipairs({ -1, 1 }) do
+		prop(m, r, 8.5, 1.6, sgn * 4.3, Vector3.new(2.6, 1.8, 0.7), sofa, fabric) -- arms
+		prop(m, r, 8.6, 1.85, sgn * 3.2, Vector3.new(0.9, 0.9, 0.35), Color3.fromRGB(240, 200, 90), fabric) -- throw pillows
+	end
+	-- coffee table with legs, a plant and mugs
+	prop(m, r, 12.5, 1.5, 0, Vector3.new(2.2, 0.25, 4), WOOD, { Material = Enum.Material.Wood })
+	for _, du in ipairs({ -0.9, 0.9 }) do
+		for _, dv in ipairs({ -1.7, 1.7 }) do
+			prop(m, r, 12.5 + du, 0.7, dv, Vector3.new(0.2, 1.4, 0.2), WOOD)
+		end
+	end
+	cyl(m, r, 12.5, 1.95, -1, 0.6, 0.45, Color3.fromRGB(240, 240, 240))
+	cyl(m, r, 12.3, 1.95, 1.2, 0.6, 0.45, Color3.fromRGB(220, 90, 80))
+	-- TV stand under the TV
+	prop(m, r, ROOM_U - 1.2, 1, 0, Vector3.new(1.6, 2, 6.5), WOOD:Lerp(Color3.new(0, 0, 0), 0.3), { Material = Enum.Material.Wood })
 	cyl(m, r, 11, 0.28, 0, 0.12, 9, Color3.fromRGB(230, 200, 120), { Material = Enum.Material.Fabric })
 	for _, v in ipairs({ -6.8, 6.8 }) do
 		cyl(m, r, ROOM_U - 1.4, 0.9, v, 1.6, 1.6, Color3.fromRGB(180, 100, 60))
@@ -743,12 +1030,87 @@ local function buildShell(m, rcf, row, side, size, wallStyle, floorStyle, hallSt
 	wall(m, rcf * CFrame.new(ROOM_U - 0.2, 0, 0) * ALONG_Z, -w / 2, w / 2, 0, WALL_H, 0.4, inner, windows)
 	-- side walls; the one at the front/back of the house gets a window
 	local front, back = -side * w / 2, side * w / 2
+	local sideWindows = {}
 	for _, v in ipairs({ front, back }) do
 		local outside = (v == front and row == 0) or (v == back and row + size - 1 == ROWS - 1)
 		local inset = v > 0 and v - 0.2 or v + 0.2
 		wall(m, rcf * CFrame.new(0, 0, inset), 0.4, ROOM_U - 0.4, 0, WALL_H, 0.4, inner, outside and { { c = ROOM_U / 2, w = 6, b = 3, t = 8 } } or nil)
+		if outside then
+			table.insert(sideWindows, v)
+		end
 	end
+	if opts.plain then
+		return
+	end
+
+	-- trim: baseboards and crown molding on every inside wall
+	local base = (wallStyle.color):Lerp(Color3.fromRGB(60, 40, 30), 0.55)
+	local function strip(name, size, u, h, v, color)
+		part({ Name = name, Size = size, CFrame = rcf * CFrame.new(u, h, v), Color = color, CanCollide = false, Parent = m })
+	end
+	for _, t in ipairs({ { "Baseboard", 0.3, 0.6, base }, { "Crown", WALL_H - 0.2, 0.4, TRIM } }) do
+		local name, h, tall, color = t[1], t[2], t[3], t[4]
+		strip(name, Vector3.new(0.14, tall, w - 0.8), ROOM_U - 0.47, h, 0, color)
+		strip(name, Vector3.new(ROOM_U - 0.8, tall, 0.14), ROOM_U / 2, h, -w / 2 + 0.47, color)
+		strip(name, Vector3.new(ROOM_U - 0.8, tall, 0.14), ROOM_U / 2, h, w / 2 - 0.47, color)
+		if opts.door and name == "Baseboard" then
+			local seg = (w - 0.8) / 2 - DOOR_W / 2 - 0.3
+			for _, sgn in ipairs({ -1, 1 }) do
+				strip(name, Vector3.new(0.14, tall, seg), 0.47, h, sgn * (DOOR_W / 2 + 0.3 + seg / 2), color)
+			end
+		else
+			strip(name, Vector3.new(0.14, tall, w - 0.8), 0.47, h, 0, color)
+		end
+	end
+
+	-- door frame on both faces, and the door standing open flat against the
+	-- hallway wall
+	if opts.door then
+		for _, sgn in ipairs({ -1, 1 }) do
+			strip("Jamb", Vector3.new(1.1, DOOR_H + 0.3, 0.3), 0, (DOOR_H + 0.3) / 2, sgn * (DOOR_W / 2 + 0.15), TRIM)
+		end
+		strip("DoorHeader", Vector3.new(1.1, 0.35, DOOR_W + 0.6), 0, DOOR_H + 0.17, 0, TRIM)
+		local leafW = DOOR_W - 0.2
+		local vc = DOOR_W / 2 + 0.35 + leafW / 2
+		strip("Door", Vector3.new(0.18, DOOR_H - 0.15, leafW), -0.52, (DOOR_H - 0.15) / 2, vc, Color3.fromRGB(150, 100, 65))
+		for _, h in ipairs({ 2, 5.2 }) do
+			strip("DoorPanel", Vector3.new(0.24, 2.4, leafW - 1.4), -0.54, h, vc, Color3.fromRGB(135, 88, 55))
+		end
+		part({ Name = "Knob", Shape = Enum.PartType.Ball, Size = Vector3.new(0.3, 0.3, 0.3), CFrame = rcf * CFrame.new(-0.7, 3.6, vc + leafW / 2 - 0.4), Color = Color3.fromRGB(230, 200, 90), Material = Enum.Material.Metal, CanCollide = false, Parent = m })
+	end
+
+	-- window trim and curtains
+	local curtain = opts.curtain or Color3.fromRGB(200, 80, 90)
+	for _, wnd in ipairs(windows or {}) do
+		local v = wnd.c
+		strip("Sill", Vector3.new(0.6, 0.25, 6.8), ROOM_U - 0.6, 2.9, v, TRIM)
+		strip("WindowTop", Vector3.new(0.25, 0.3, 6.6), ROOM_U - 0.5, 8.15, v, TRIM)
+		strip("CurtainRod", Vector3.new(0.12, 0.12, 9), ROOM_U - 0.75, 8.7, v, Color3.fromRGB(90, 70, 50))
+		for _, sgn in ipairs({ -1, 1 }) do
+			local c = part({ Name = "Curtain", Size = Vector3.new(0.12, 6.6, 1.5), CFrame = rcf * CFrame.new(ROOM_U - 0.8, 5.35, v + sgn * 3.7), Color = curtain, Material = Enum.Material.Fabric, CanCollide = false, Parent = m })
+			c:SetAttribute("Curtain", true)
+			strip("Tie", Vector3.new(0.2, 0.25, 1.6), ROOM_U - 0.82, 4, v + sgn * 3.7, curtain:Lerp(Color3.new(1, 1, 1), 0.4))
+		end
+	end
+	for _, v in ipairs(sideWindows) do
+		local inward = v > 0 and -1 or 1
+		strip("Sill", Vector3.new(6.8, 0.25, 0.6), ROOM_U / 2, 2.9, v + inward * 0.6, TRIM)
+		strip("WindowTop", Vector3.new(6.6, 0.3, 0.25), ROOM_U / 2, 8.15, v + inward * 0.5, TRIM)
+	end
+
+	-- ceiling light
+	local fixture = part({ Name = "CeilingLight", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 2.2, 2.2), CFrame = rcf * CFrame.new(ROOM_U / 2, WALL_H - 0.15, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(255, 244, 220), Material = Enum.Material.Neon, CanCollide = false, Parent = m })
+	local l = Instance.new("PointLight")
+	l.Range = 20
+	l.Brightness = opts.bright and 1.4 or 0.9
+	l.Color = Color3.fromRGB(255, 225, 180)
+	l.Shadows = false
+	l.Parent = fixture
 end
+
+local CURTAINS = {
+	Color3.fromRGB(200, 80, 90), Color3.fromRGB(90, 130, 200), Color3.fromRGB(230, 190, 90), Color3.fromRGB(110, 170, 120), Color3.fromRGB(170, 120, 200), Color3.fromRGB(240, 240, 235),
+}
 
 local function signature(plot, data)
 	local parts = { plot.owner.DisplayName, tostring(House.floorCount(data)) }
@@ -812,33 +1174,64 @@ local function renderStructure(plot, data)
 			slab(lv, -HALL_W / 2, 0, STAIR_Z1, TOWER_Z1, y - 1, y)
 		end
 		part({ Name = "HallFloor", Size = Vector3.new(HALL_W, 0.2, HOUSE_Z1 - HOUSE_Z0), CFrame = L(0, y + 0.1, (HOUSE_Z0 + HOUSE_Z1) / 2), Style = hallFloor, Parent = lv })
+		-- runner rug with a border, wall sconces between the doors
+		part({ Name = "Runner", Size = Vector3.new(4.4, 0.06, HOUSE_Z1 - HOUSE_Z0 - 4), CFrame = L(0, y + 0.23, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = Color3.fromRGB(200, 170, 90), Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
+		part({ Name = "Runner", Size = Vector3.new(3.6, 0.08, HOUSE_Z1 - HOUSE_Z0 - 4.8), CFrame = L(0, y + 0.24, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = Color3.fromRGB(150, 40, 50), Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
+		for r = 1, ROWS - 1 do
+			local z = HOUSE_Z0 + r * ROOM_V
+			for _, sd in ipairs({ -1, 1 }) do
+				local x = sd * (HALL_W / 2 - 0.5)
+				part({ Name = "SconcePlate", Size = Vector3.new(0.15, 1, 0.6), CFrame = L(x, y + 7, z), Color = Color3.fromRGB(200, 170, 90), Material = Enum.Material.Metal, CanCollide = false, Parent = lv })
+				local bulb = part({ Name = "Sconce", Shape = Enum.PartType.Ball, Size = Vector3.new(0.6, 0.6, 0.6), CFrame = L(x - sd * 0.35, y + 7.3, z), Color = Color3.fromRGB(255, 235, 190), Material = Enum.Material.Neon, CanCollide = false, Parent = lv })
+				if (r + (sd == 1 and 1 or 0)) % 2 == 0 then
+					local l = Instance.new("PointLight")
+					l.Range = 16
+					l.Brightness = 0.8
+					l.Color = Color3.fromRGB(255, 220, 170)
+					l.Shadows = false
+					l.Parent = bulb
+				end
+			end
+		end
+		-- outside: a trim band at every floor line
+		if f > 0 then
+			for _, b in ipairs({
+				{ HALF_X * 2 + 2, 0.6, HOUSE_Z0 - 0.75, 0 },
+				{ HALF_X * 2 + 2, 0.6, HOUSE_Z1 + 0.75, 0 },
+			}) do
+				part({ Name = "Band", Size = Vector3.new(b[1], b[2], 0.3), CFrame = L(b[4], y - 0.5, b[3]), Color = TRIM, CanCollide = false, Parent = lv })
+			end
+			for _, sd in ipairs({ -1, 1 }) do
+				part({ Name = "Band", Size = Vector3.new(0.3, 0.6, HOUSE_Z1 - HOUSE_Z0 + 1.8), CFrame = L(sd * (HALF_X + 0.75), y - 0.5, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = TRIM, CanCollide = false, Parent = lv })
+			end
+		end
 
 		-- outside walls (cover the slab edge too)
 		local h0 = f == 0 and GROUND_Y or y - 1
 		local h1 = floorY(f + 1) - 1
 		local wb, wt = y + 3, y + 8
 		local exProps = { Name = "Outside", Style = ext }
-		local frontHoles = { { c = -(HALL_W / 2 + ROOM_U / 2), w = 6, b = wb, t = wt, glass = true }, { c = HALL_W / 2 + ROOM_U / 2, w = 6, b = wb, t = wt, glass = true } }
+		local frontHoles = { { c = -(HALL_W / 2 + ROOM_U / 2), w = 6, b = wb, t = wt, glass = true, out = -1 }, { c = HALL_W / 2 + ROOM_U / 2, w = 6, b = wb, t = wt, glass = true, out = -1 } }
 		if f == 0 then
 			table.insert(frontHoles, { c = 0, w = 6, b = h0, t = y + DOOR_H + 0.5 })
 		else
-			table.insert(frontHoles, { c = 0, w = 6, b = wb, t = wt, glass = true })
+			table.insert(frontHoles, { c = 0, w = 6, b = wb, t = wt, glass = true, out = -1 })
 		end
 		wall(lv, L(0, 0, HOUSE_Z0 - 0.3), -HALF_X - 0.6, HALF_X + 0.6, h0, h1, 0.6, exProps, frontHoles)
 		for _, side in ipairs({ -1, 1 }) do
 			local holes = {}
 			for r = 0, ROWS - 1 do
-				table.insert(holes, { c = HOUSE_Z0 + ROOM_V * (r + 0.5), w = 6, b = wb, t = wt, glass = true })
+				table.insert(holes, { c = HOUSE_Z0 + ROOM_V * (r + 0.5), w = 6, b = wb, t = wt, glass = true, out = -side })
 			end
 			wall(lv, L(side * (HALF_X + 0.3), 0, 0) * ALONG_Z, HOUSE_Z0, HOUSE_Z1 + 0.6, h0, h1, 0.6, exProps, holes)
 			-- back of the room block, beside the stairwell
 			local xa, xb = side * (HALL_W / 2 + 0.6), side * (HALF_X + 0.6)
 			local mid = (xa + xb) / 2
-			wall(lv, L(mid, 0, HOUSE_Z1 + 0.3), -math.abs(xb - xa) / 2, math.abs(xb - xa) / 2, h0, h1, 0.6, exProps, { { c = side * (HALL_W / 2 + ROOM_U / 2) - mid, w = 6, b = wb, t = wt, glass = true } })
+			wall(lv, L(mid, 0, HOUSE_Z1 + 0.3), -math.abs(xb - xa) / 2, math.abs(xb - xa) / 2, h0, h1, 0.6, exProps, { { c = side * (HALL_W / 2 + ROOM_U / 2) - mid, w = 6, b = wb, t = wt, glass = true, out = 1 } })
 			-- stairwell sides
 			wall(lv, L(side * (HALL_W / 2 + 0.3), 0, 0) * ALONG_Z, HOUSE_Z1, TOWER_Z1 + 0.6, h0, h1, 0.6, exProps)
 		end
-		wall(lv, L(0, 0, TOWER_Z1 + 0.3), -HALL_W / 2 - 0.6, HALL_W / 2 + 0.6, h0, h1, 0.6, exProps, { { c = HALL_W / 4, w = 3, b = wb, t = wt, glass = true } })
+		wall(lv, L(0, 0, TOWER_Z1 + 0.3), -HALL_W / 2 - 0.6, HALL_W / 2 + 0.6, h0, h1, 0.6, exProps, { { c = HALL_W / 4, w = 3, b = wb, t = wt, glass = true, out = 1 } })
 
 		-- stairs up: an invisible ramp you walk on, with open steps drawn over it
 		local rail = { Name = "Rail", Color = Color3.fromRGB(190, 230, 255), Material = Enum.Material.Glass, Transparency = 0.5 }
@@ -895,6 +1288,44 @@ local function renderStructure(plot, data)
 		hallModel:SetAttribute("IsHall", true)
 	end
 
+	-- foundation, corner posts, front porch
+	local g = levels[0]
+	local stone = { Color = Color3.fromRGB(150, 145, 140), Material = Enum.Material.Cobblestone }
+	local function block(parent, name, size, x, y, z, props)
+		local p = table.clone(props)
+		p.Name, p.Size, p.CFrame, p.Parent = name, size, L(x, y, z), parent
+		return part(p)
+	end
+	block(g, "Foundation", Vector3.new(HALF_X * 2 + 2, 1.2, 0.5), 0, GROUND_Y + 0.6, HOUSE_Z0 - 0.8, stone)
+	block(g, "Foundation", Vector3.new(HALF_X * 2 + 2, 1.2, 0.5), 0, GROUND_Y + 0.6, HOUSE_Z1 + 0.85, stone)
+	for _, sd in ipairs({ -1, 1 }) do
+		block(g, "Foundation", Vector3.new(0.5, 1.2, HOUSE_Z1 - HOUSE_Z0 + 2), sd * (HALF_X + 0.8), GROUND_Y + 0.6, (HOUSE_Z0 + HOUSE_Z1) / 2, stone)
+		block(g, "Foundation", Vector3.new(0.5, 1.2, TOWER_Z1 - HOUSE_Z1 + 1), sd * (HALL_W / 2 + 0.8), GROUND_Y + 0.6, (HOUSE_Z1 + TOWER_Z1) / 2 + 0.5, stone)
+	end
+	local tall = floorY(floors) - 1 - GROUND_Y
+	for _, c in ipairs({ { -1, HOUSE_Z0 }, { 1, HOUSE_Z0 }, { -1, HOUSE_Z1 }, { 1, HOUSE_Z1 } }) do
+		block(g, "Corner", Vector3.new(1.3, tall, 1.3), c[1] * (HALF_X + 0.5), GROUND_Y + tall / 2, c[2] + (c[2] < 0 and -0.5 or 0.5), { Color = TRIM })
+	end
+	-- porch: steps, a little roof on posts, two lanterns
+	local trimP = { Color = TRIM }
+	block(g, "Step", Vector3.new(9, 0.3, 4), 0, GROUND_Y + 0.15, HOUSE_Z0 - 2.6, stone)
+	block(g, "Step", Vector3.new(8, 0.3, 2), 0, GROUND_Y + 0.45, HOUSE_Z0 - 1.6, stone)
+	block(g, "PorchRoof", Vector3.new(10, 0.5, 4.6), 0, floorY(0) + DOOR_H + 1.2, HOUSE_Z0 - 2.6, { Color = Color3.fromRGB(90, 60, 45), Material = Enum.Material.WoodPlanks })
+	block(g, "PorchTrim", Vector3.new(10.4, 0.3, 0.3), 0, floorY(0) + DOOR_H + 0.85, HOUSE_Z0 - 4.8, trimP)
+	for _, sd in ipairs({ -1, 1 }) do
+		block(g, "PorchPost", Vector3.new(0.5, DOOR_H + 1.4, 0.5), sd * 4.5, floorY(0) + (DOOR_H + 1.4) / 2, HOUSE_Z0 - 4.5, trimP)
+		block(g, "DoorJamb", Vector3.new(0.6, DOOR_H + 0.9, 0.9), sd * 3.3, floorY(0) + (DOOR_H + 0.9) / 2 - 0.6, HOUSE_Z0 - 0.3, trimP)
+		local lantern = block(g, "Lantern", Vector3.new(0.6, 0.9, 0.6), sd * 4.3, floorY(0) + 6, HOUSE_Z0 - 0.9, { Color = Color3.fromRGB(255, 220, 150), Material = Enum.Material.Neon })
+		block(g, "LanternCap", Vector3.new(0.8, 0.2, 0.8), sd * 4.3, floorY(0) + 6.55, HOUSE_Z0 - 0.9, { Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal })
+		local l = Instance.new("PointLight")
+		l.Range = 14
+		l.Brightness = 1
+		l.Color = Color3.fromRGB(255, 210, 150)
+		l.Parent = lantern
+	end
+	block(g, "DoorHeader", Vector3.new(7.2, 0.6, 0.9), 0, floorY(0) + DOOR_H + 0.3, HOUSE_Z0 - 0.3, trimP)
+	block(g, "Doormat", Vector3.new(4, 0.08, 2.4), 0, GROUND_Y + 0.64, HOUSE_Z0 - 1.6, { Color = Color3.fromRGB(150, 110, 70), Material = Enum.Material.Fabric, CanCollide = false })
+
 	-- rooms: walk every cell of every floor
 	local grid = House.grid(data)
 	for f = 0, floors - 1 do
@@ -906,7 +1337,7 @@ local function renderStructure(plot, data)
 				if not s then
 					m.Name = "EmptyCell"
 					local rcf = roomFrame(plot, f, side, row, 1)
-					buildShell(m, rcf, row, side, 1, hall, hallFloor, hall, { door = false })
+					buildShell(m, rcf, row, side, 1, hall, hallFloor, hall, { door = false, plain = true })
 					local plate = part({ Name = "Plate", Size = Vector3.new(0.1, 1.6, 6), CFrame = rcf * CFrame.new(-0.45, 5, 0), Color = Color3.fromRGB(250, 220, 120), Parent = m })
 					local sg = surface(plate, Enum.NormalId.Left, Vector2.new(600, 160))
 					label(sg, "🚧 Empty: plan it on your layout board", Color3.fromRGB(60, 40, 30)).TextStrokeTransparency = 1
@@ -918,7 +1349,8 @@ local function renderStructure(plot, data)
 					local wallStyle = House.style(data, s.key, "wall")
 					local floorStyle = House.style(data, s.key, "floor")
 					local isMe = s.kind == "me"
-					buildShell(m, rcf, row, side, s.size, wallStyle, floorStyle, hall, { door = true, window = not (isMe or s.kind == "common") })
+					local tier = s.kind == "dorm" and data.rooms[s.index] and data.rooms[s.index].tier or 1
+					buildShell(m, rcf, row, side, s.size, wallStyle, floorStyle, hall, { door = true, window = not (isMe or s.kind == "common"), curtain = CURTAINS[(#s.key * 7 + row * 3 + f) % #CURTAINS + 1], bright = tier >= 3 or s.kind ~= "dorm" })
 					local info = roomInfo(plot, rcf, s.key, f, s.size, s.kind == "common" or s.kind == "facility")
 					plot.rooms[s.key] = info
 					tagRoom(m, plot, info)
@@ -942,8 +1374,12 @@ local function renderStructure(plot, data)
 							cyl(m, rcf, 7, 0.28, 0, 0.12, 6, Config.Personalities.Artist.color, { Material = Enum.Material.Fabric })
 						end
 						if room and room.tier >= 3 then
-							local lamp = prop(m, rcf, ROOM_U / 2, WALL_H - 1.2, 0, Vector3.new(1.5, 1.5, 1.5), Color3.fromRGB(255, 240, 200), { Shape = Enum.PartType.Ball, Material = Enum.Material.Neon, CanCollide = false })
-							light(lamp, 16)
+							-- a desk under the side wall and a wall picture
+							prop(m, rcf, 4.5, 2.6, -ROOM_V * s.size / 2 + 1.4, Vector3.new(3.2, 0.25, 1.6), BED_WOOD, { Material = Enum.Material.Wood })
+							prop(m, rcf, 4.5, 1.25, -ROOM_V * s.size / 2 + 1.4, Vector3.new(3, 2.5, 1.4), BED_WOOD:Lerp(Color3.new(0, 0, 0), 0.2), { Material = Enum.Material.Wood })
+							prop(m, rcf, 4.5, 3.1, -ROOM_V * s.size / 2 + 1.2, Vector3.new(1.2, 0.8, 0.08), DARK)
+							prop(m, rcf, 9, 6.5, ROOM_V * s.size / 2 - 0.45, Vector3.new(3, 2.2, 0.1), Color3.fromRGB(120, 180, 230), { CanCollide = false })
+							prop(m, rcf, 9, 6.5, ROOM_V * s.size / 2 - 0.42, Vector3.new(3.4, 2.6, 0.06), Color3.fromRGB(200, 160, 60), { CanCollide = false, Material = Enum.Material.Foil })
 						end
 						if room and room.tier >= 4 then
 							local w = ROOM_V * s.size
@@ -977,6 +1413,13 @@ local function renderStructure(plot, data)
 			part({ Name = "Gable", Size = Vector3.new(w, ridge / bars, 0.6), CFrame = L(0, top + 1 + (k + 0.5) * ridge / bars, z), Style = ext, Parent = lv })
 		end
 	end
+	-- eave boards and a chimney
+	for _, sd in ipairs({ -1, 1 }) do
+		part({ Name = "Fascia", Size = Vector3.new(0.4, 0.8, len + 0.2), CFrame = L(sd * (half + 0.15), top + 0.85, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = TRIM, Parent = lv })
+	end
+	part({ Name = "Ridge", Size = Vector3.new(1, 0.6, len + 0.2), CFrame = L(0, top + 1 + ridge + 0.2, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = roof.color:Lerp(Color3.new(0, 0, 0), 0.25), Material = mat(roof.material), Parent = lv })
+	part({ Name = "Chimney", Size = Vector3.new(3, ridge + 3, 3), CFrame = L(13, top + 1 + (ridge + 3) / 2, 22), Color = Color3.fromRGB(150, 70, 55), Material = Enum.Material.Brick, Parent = lv })
+	part({ Name = "ChimneyCap", Size = Vector3.new(3.6, 0.5, 3.6), CFrame = L(13, top + 1 + ridge + 3.25, 22), Color = Color3.fromRGB(80, 80, 85), Material = Enum.Material.Concrete, Parent = lv })
 	local roofSign = part({ Name = "RoofSign", Size = Vector3.new(22, 3, 0.4), CFrame = L(0, top + 3, HOUSE_Z0 - 0.9), Color = Color3.fromRGB(40, 40, 60), Parent = lv })
 	label(surface(roofSign, Enum.NormalId.Front, Vector2.new(880, 120)), plot.owner.DisplayName .. "'s Boarding House", Color3.fromRGB(255, 220, 90))
 end
@@ -1204,6 +1647,15 @@ local function renderLive(plot, data, totals)
 					color = Config.Personalities[Config.StudentById[data.students[occ].id].personality].color
 				end
 				bed(lv, rcf * CFrame.new(ROOM_U - 4.2, 0.2, v) * BED_TURN, color)
+				-- nightstand + lamp between beds when there's space
+				if b < beds and w / beds >= 5.4 then
+					local nv = v + w / beds / 2
+					local ns = rcf * CFrame.new(ROOM_U - 1.4, 0, nv)
+					part({ Name = "Nightstand", Size = Vector3.new(1.4, 1.8, 1.3), CFrame = ns * CFrame.new(0, 1.1, 0), Color = BED_WOOD, Material = Enum.Material.Wood, Parent = lv })
+					part({ Name = "Drawer", Size = Vector3.new(0.05, 0.5, 1), CFrame = ns * CFrame.new(-0.72, 1.4, 0), Color = BED_WOOD:Lerp(Color3.new(0, 0, 0), 0.25), CanCollide = false, Parent = lv })
+					part({ Name = "LampBase", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.8, 0.25, 0.25), CFrame = ns * CFrame.new(0, 2.4, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(60, 60, 65), CanCollide = false, Parent = lv })
+					part({ Name = "LampShade", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.6, 0.8, 0.8), CFrame = ns * CFrame.new(0, 3, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(255, 235, 200), Material = Enum.Material.Neon, CanCollide = false, Parent = lv })
+				end
 			end
 
 			-- door plate + prompt in the hallway

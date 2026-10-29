@@ -14,6 +14,34 @@ local ANGRY = { "💢", "😤", "🙄", "😭" }
 local SPEED = 5
 local OUTING_CHANCE = 0.3
 
+-- Roblox's default R15 walk/idle animations, for avatar students
+local WALK_ANIM = "rbxassetid://507777826"
+local IDLE_ANIM = "rbxassetid://507766388"
+
+local function loadTracks(model)
+	local hum = model:FindFirstChildOfClass("Humanoid")
+	if not hum then
+		return nil
+	end
+	local ok, tracks = pcall(function()
+		local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator")
+		animator.Parent = hum
+		local function load(id)
+			local a = Instance.new("Animation")
+			a.AnimationId = id
+			local t = animator:LoadAnimation(a)
+			t.Looped = true
+			return t
+		end
+		return { walk = load(WALK_ANIM), idle = load(IDLE_ANIM) }
+	end)
+	if not ok then
+		return nil
+	end
+	tracks.idle:Play(0.2)
+	return tracks
+end
+
 local function bubble(model, sat)
 	local head = model:FindFirstChild("Head")
 	if not head then
@@ -107,6 +135,8 @@ local function add(model)
 		nextBubble = os.clock() + math.random(2, 8),
 		queue = {},
 		outingStops = 0,
+		tracks = loadTracks(model),
+		walking = false,
 	}
 	st.target = randomPoint(home)
 	walkers[model] = st
@@ -170,7 +200,22 @@ RunService.RenderStepped:Connect(function(dt)
 				st.pos += delta.Unit * step
 				st.dir = delta.Unit
 			end
-			local bob = moving and math.abs(math.sin(st.phase * 10)) * 0.35 or math.sin(st.phase * 2) * 0.08
+			local bob = 0
+			if st.tracks then
+				if moving ~= st.walking then
+					st.walking = moving
+					if moving then
+						st.tracks.idle:Stop(0.2)
+						st.tracks.walk:Play(0.2)
+						st.tracks.walk:AdjustSpeed(SPEED / 12)
+					else
+						st.tracks.walk:Stop(0.2)
+						st.tracks.idle:Play(0.2)
+					end
+				end
+			else
+				bob = moving and math.abs(math.sin(st.phase * 10)) * 0.35 or math.sin(st.phase * 2) * 0.08
+			end
 			local look = st.dir or st.home.u
 			local p = Vector3.new(st.pos.X, st.baseY + bob, st.pos.Z)
 			model:PivotTo(CFrame.lookAt(p, p + Vector3.new(look.X, 0, look.Z)))
