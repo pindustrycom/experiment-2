@@ -307,14 +307,11 @@ Config.DailyFreeBanner = "honors"
 Config.DailyCooldown = 20 * 3600
 
 ---------------------------------------------------------------------------
--- The house: floors, dorm rooms, upgrades
--- Everything lives in one walkable house. Each floor is a hallway with a row
--- of cells on each side (Config.SlotsPerFloor cells per floor). Your room
--- takes 2 cells and the common room 1, both on the ground floor. You choose
--- which cell every new dorm or facility goes in on the floor layout board,
--- and dorms can be expanded into the cell next to them.
+-- The house: floors, rooms, hallways, upgrades
+-- You design every floor on a tile grid (see shared/House.lua): draw
+-- hallways, then rooms of any size next to them. Your room (3 x 6 tiles) and
+-- the common room start on the ground floor.
 ---------------------------------------------------------------------------
-Config.SlotsPerFloor = 12
 Config.MaxRooms = 40 -- dorm rooms
 Config.StartingRooms = 2
 Config.MaxFloors = 6
@@ -324,15 +321,23 @@ function Config.FloorCost(n)
 	return math.floor(5000 * 7 ^ (n - 2) / 100 + 0.5) * 100
 end
 
--- expanding a dorm into the empty cell beside it: more beds and more space
-Config.BigRoomBeds = 2
-Config.BigRoomDecor = 6
+-- a dorm starts at 3 x 3 tiles; every 6 tiles more adds a bed (up to 6 extra) and some decor
+Config.BigRoomDecor = 6 -- decor for 9 extra tiles
 function Config.ExpandCost(index)
 	return math.floor(2500 * (1 + 0.4 * (index - 1)) / 10 + 0.5) * 10
 end
+-- price per tile a dorm grows past 3 x 3
+function Config.ExtraTileCost(index)
+	return math.floor(Config.ExpandCost(index) / 9 / 10 + 0.5) * 10
+end
+Config.HallTileCost = 40
+-- supports let the next floor hang over this one
+function Config.SupportCost(floorIndex)
+	return math.floor(4000 * 3 ^ floorIndex / 100 + 0.5) * 100
+end
 
 function Config.Beds(room)
-	return Config.RoomTiers[room.tier].beds + ((room.size or 1) >= 2 and Config.BigRoomBeds or 0)
+	return Config.RoomTiers[room.tier].beds + math.min(6, math.floor(math.max(0, (room.area or 9) - 9) / 6))
 end
 
 function Config.RoomUnlockCost(index)

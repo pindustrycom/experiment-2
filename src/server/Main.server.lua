@@ -570,70 +570,214 @@ function Actions.expel(player, data, args)
 	return { ok = true, value = value }
 end
 
--- Floor layout board: build a dorm or facility in a chosen cell
-function Actions.build(player, data, args)
-	local floor, side, row = args.floor, args.side, args.row
-	if args.kind == "dorm" then
-		local index = #data.rooms + 1
-		if index > Config.MaxRooms then
-			return { ok = false, err = "You have the most dorm rooms a house can hold!" }
-		end
-		local size = args.big == true and 2 or 1
-		if not House.isFree(data, floor, side, row, size) then
-			return { ok = false, err = size == 2 and "A big room needs this cell and the one behind it free." or "That spot is taken." }
-		end
-		local cost = Config.RoomUnlockCost(index) + (size == 2 and Config.ExpandCost(index) or 0)
-		if not spend(data, cost) then
-			return { ok = false, err = "Not enough cash!" }
-		end
-		table.insert(data.rooms, { tier = 1, size = size, occupants = {} })
-		data.layout["r" .. index] = { floor = floor, side = side, row = row }
-		return { ok = true }
-	elseif args.kind == "facility" then
-		local f = typeof(args.id) == "string" and Config.FacilityById[args.id]
-		if not f or data.facilities[f.id] then
-			return { ok = false }
-		end
-		if not House.isFree(data, floor, side, row, 1) then
-			return { ok = false, err = "That spot is taken." }
-		end
-		if not spend(data, f.cost) then
-			return { ok = false, err = "Not enough cash!" }
-		end
-		data.facilities[f.id] = true
-		data.layout["fac:" .. f.id] = { floor = floor, side = side, row = row }
-		return { ok = true }
-	end
-	return { ok = false }
+-- Floor plan designer. Every change is tried on a copy of the plan and only
+-- kept if the whole house still works (House.validate).
+local function isInt(v, lo, hi)
+	return typeof(v) == "number" and v % 1 == 0 and v >= lo and v <= hi
 end
 
-function Actions.expandRoom(player, data, args)
-	local index = typeof(args.room) == "number" and args.room
-	local room = index and data.rooms[index]
-	if not room then
+local function commitPlan(data, copy)
+	data.plan = copy.plan
+	data.layout = copy.layout
+	data.floors = copy.floors
+	for key in pairs(data.layout) do
+		data.layout[key].door = House.door(data, key)
+	end
+	for i, room in ipairs(data.rooms) do
+		room.area = House.area(data, "r" .. i)
+		while #room.occupants > Config.Beds(room) do
+			table.remove(room.occupants)
+		end
+	end
+end
+
+local PlanOps = {}
+
+function PlanOps.hall(data, args)
+	local f = args.floor
+	if not isInt(f, 0, House.floorCount(data) - 1) or typeof(args.tiles) ~= "table" or #args.tiles > House.W * House.D then
 		return { ok = false }
 	end
-	local newRow = House.expandRow(data, index)
-	if not newRow then
-		return { ok = false, err = "There's no empty cell next to this room." }
+	local copy = House.clonePlan(data)
+	local added = 0
+	for _, t in ipairs(args.tiles) do
+		if typeof(t) == "table" and isInt(t[1], 0, House.W - 1) and isInt(t[2], 0, House.D - 1) then
+			local was = House.isHall(copy, f, t[1], t[2])
+			if args.on and not was then
+				added += 1
+			end
+			House.setHall(copy, f, t[1], t[2], args.on == true)
+		end
 	end
-	if not spend(data, Config.ExpandCost(index)) then
+	local ok, err = House.validate(copy)
+	if not ok then
+		return { ok = false, err = err }
+	end
+	if not spend(data, added * Config.HallTileCost) then
 		return { ok = false, err = "Not enough cash!" }
 	end
-	room.size = 2
-	data.layout["r" .. index].row = newRow
+	commitPlan(data, copy)
 	return { ok = true }
 end
 
+function PlanOps.room(data, args)
+	local f, x, z, w, d = args.floor, args.x, args.z, args.w, args.d
+	if not (isInt(f, 0, House.floorCount(data) - 1) and isInt(x, 0, House.W - 1) and isInt(z, 0, House.D - 1) and isInt(w, 1, 8) and isInt(d, 1, 8)) then
+		return { ok = false }
+	end
+	local key, cost, newRoom, newFacility = args.key, 0, false, nil
+	if key == nil then
+		if args.kind == "dorm" then
+			local index = #data.rooms + 1
+			if index > Config.MaxRooms then
+				return { ok = false, err = "You have the most dorm rooms a house can hold!" }
+			end
+			key = "r" .. index
+			newRoom = true
+			cost = Config.RoomUnlockCost(index) + math.max(0, w * d - 9) * Config.ExtraTileCost(index)
+		elseif args.kind == "facility" then
+			local fac = typeof(args.id) == "string" and Config.FacilityById[args.id]
+			if not fac or data.facilities[fac.id] then
+				return { ok = false }
+			end
+			key = "fac:" .. fac.id
+			newFacility = fac
+			cost = fac.cost
+		else
+			return { ok = false }
+		end
+	elseif typeof(key) ~= "string" or not data.layout[key] then
+		return { ok = false }
+	end
+	local kind, index = House.describe(key)
+	if kind == "me" then
+		if not ((w == House.MeSize[1] and d == House.MeSize[2]) or (w == House.MeSize[2] and d == House.MeSize[1])) then
+			return { ok = false, err = "Your room is always 3 x 6 tiles. You can turn it and move it." }
+		end
+	elseif w < House.MinSize[kind] or d < House.MinSize[kind] then
+		return { ok = false, err = "Rooms need to be at least 3 x 3 tiles." }
+	end
+	if kind == "dorm" and not newRoom then
+		cost = math.max(0, w * d - House.area(data, key)) * Config.ExtraTileCost(index)
+	end
+	local copy = House.clonePlan(data)
+	if newRoom then
+		copy.rooms = table.clone(data.rooms)
+		table.insert(copy.rooms, { tier = 1, area = w * d, occupants = {} })
+	end
+	local old = copy.layout[key]
+	copy.layout[key] = { floor = f, x = x, z = z, w = w, d = d, door = old and old.door }
+	local ok, err = House.validate(copy)
+	if not ok then
+		return { ok = false, err = err }
+	end
+	if not spend(data, cost) then
+		return { ok = false, err = "Not enough cash!" }
+	end
+	if newRoom then
+		table.insert(data.rooms, { tier = 1, area = w * d, occupants = {} })
+	elseif newFacility then
+		data.facilities[newFacility.id] = true
+	end
+	commitPlan(data, copy)
+	return { ok = true, cost = cost }
+end
+
+function PlanOps.door(data, args)
+	local key = args.key
+	local r = typeof(key) == "string" and data.layout[key]
+	if not r or not (isInt(args.x, 0, House.W - 1) and isInt(args.z, 0, House.D - 1) and isInt(args.dx, -1, 1) and isInt(args.dz, -1, 1)) then
+		return { ok = false }
+	end
+	local copy = House.clonePlan(data)
+	copy.layout[key].door = { x = args.x, z = args.z, dx = args.dx, dz = args.dz }
+	local door = House.door(copy, key)
+	if not door or door.x ~= args.x or door.z ~= args.z or door.dx ~= args.dx or door.dz ~= args.dz then
+		return { ok = false, err = "A door has to open from the room onto a hallway tile." }
+	end
+	local ok, err = House.validate(copy)
+	if not ok then
+		return { ok = false, err = err }
+	end
+	commitPlan(data, copy)
+	return { ok = true }
+end
+
+function PlanOps.stairs(data, args)
+	local f = args.floor
+	if not (isInt(f, 0, House.floorCount(data) - 2) and isInt(args.x, 0, House.W - 1) and isInt(args.z, 0, House.D - 1) and isInt(args.dir, 1, 4)) then
+		return { ok = false, err = "Stairs go up to the next floor. Buy another floor first!" }
+	end
+	local copy = House.clonePlan(data)
+	copy.plan.stairs[f + 1] = { x = args.x, z = args.z, dir = args.dir }
+	local ok, err = House.validate(copy)
+	if not ok then
+		return { ok = false, err = err }
+	end
+	commitPlan(data, copy)
+	return { ok = true }
+end
+
+function PlanOps.support(data, args)
+	local f = args.floor
+	if not isInt(f, 0, House.floorCount(data) - 1) then
+		return { ok = false }
+	end
+	local copy = House.clonePlan(data)
+	copy.plan.floors[f + 1].support = args.on == true
+	local ok, err = House.validate(copy)
+	if not ok then
+		return { ok = false, err = err }
+	end
+	local cost = (args.on and not House.supported(data, f)) and Config.SupportCost(f) or 0
+	if not spend(data, cost) then
+		return { ok = false, err = "Not enough cash!" }
+	end
+	commitPlan(data, copy)
+	return { ok = true }
+end
+
+function Actions.plan(player, data, args)
+	local op = typeof(args) == "table" and PlanOps[args.op]
+	if not op then
+		return { ok = false }
+	end
+	return op(data, args)
+end
+
+-- a new floor starts with the hallways of the floor below and stairs up to it
 function Actions.buyFloor(player, data)
 	local n = House.floorCount(data) + 1
 	if n > Config.MaxFloors then
 		return { ok = false, err = "Your house is as tall as it gets!" }
 	end
+	local copy = House.clonePlan(data)
+	copy.floors = n
+	copy.plan.floors[n] = { hall = copy.plan.floors[n - 1].hall, support = false }
+	local below = n - 2 -- floor index the new stairs start on
+	local function try(s)
+		copy.plan.stairs[below + 1] = s
+		return House.validate(copy)
+	end
+	local found = try(House.defaultStairs(below))
+	if not found then
+		for z = 0, House.D - 1 do
+			for x = 0, House.W - 1 do
+				for dir = 1, 4 do
+					if not found and House.isHall(copy, below, x, z) and try({ x = x, z = z, dir = dir }) then
+						found = true
+					end
+				end
+			end
+		end
+	end
+	if not found then
+		return { ok = false, err = "There's no spot for stairs: you need a straight hallway 5 tiles long on the top floor." }
+	end
 	if not spend(data, Config.FloorCost(n)) then
 		return { ok = false, err = "Not enough cash!" }
 	end
-	data.floors = n
+	commitPlan(data, copy)
 	AnnounceEv:FireAllClients({ player = player.DisplayName, floor = n })
 	return { ok = true }
 end

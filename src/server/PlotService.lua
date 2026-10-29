@@ -1,13 +1,14 @@
 -- Builds the world (plaza + plots) and renders each player's boarding house
 -- from data. Everything is procedural, so the place needs no prebuilt models.
 --
--- A house is one walkable building: a hallway runs from the front door to the
--- stairwell at the back, with a row of cells on both sides. Rooms take one
--- or two cells (see shared/House.lua for the layout data). Plot-local axes: -Z is the front (toward the
--- plaza), +X is the right side when you walk in through the front door.
+-- A house is one walkable building drawn from the player's floor plan
+-- (shared/House.lua): hallway tiles, rectangular rooms, stairs between floors,
+-- and floors that may hang out over supported ones. Plot-local axes: -Z is the
+-- front (toward the plaza), +X is the right side when you walk in.
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 
 local Config = require(ReplicatedStorage.Shared.Config)
 local SchoolMath = require(ReplicatedStorage.Shared.SchoolMath)
@@ -18,15 +19,10 @@ PlotService.Plots = {} -- list of { model, cf, owner, house, live }
 
 local FLOOR_H = House.FloorHeight -- slab top to slab top
 local WALL_H = FLOOR_H - 1
-local HALL_W = 12
-local ROOM_U = 18 -- room depth, from the hallway out to the outside wall
-local ROOM_V = 16 -- room width along the hallway
-local ROWS = Config.SlotsPerFloor / 2
-local HOUSE_Z0 = -44 -- front wall
-local HOUSE_Z1 = HOUSE_Z0 + ROWS * ROOM_V -- back of the room block
-local STAIR_Z0, STAIR_Z1 = HOUSE_Z1 + 1, HOUSE_Z1 + 18 -- ramp bottom/top
-local TOWER_Z1 = STAIR_Z1 + 4 -- back wall of the stairwell
-local HALF_X = HALL_W / 2 + ROOM_U
+-- size of the room being furnished (studs): depth from the furnished wall and
+-- width along it. Set per room before its props are built.
+local ROOM_U, ROOM_V = 18, 18
+local HOUSE_Z0 = House.Z0 -- front of the lot
 local GROUND_Y = 0.6 -- top of the plot base
 local PLOT_W, PLOT_D = 150, 150
 local DOOR_W, DOOR_H = 5, 8
@@ -359,15 +355,15 @@ function PlotService.BuildWorld()
 		model.Parent = world
 		part({
 			Name = "Base",
-			Size = Vector3.new(PLOT_W, 0.6, PLOT_D),
-			CFrame = cf * CFrame.new(0, 0.3, 0),
+			Size = Vector3.new(PLOT_W, 0.6, PLOT_D + 10),
+			CFrame = cf * CFrame.new(0, 0.3, 5),
 			Color = Color3.fromRGB(150, 210, 120),
 			Material = Enum.Material.Grass,
 			Parent = model,
 		})
 		-- front path + a few trees so the yard doesn't look empty
 		part({ Name = "Walk", Size = Vector3.new(8, 0.2, PLOT_D / 2 + HOUSE_Z0), CFrame = cf * CFrame.new(0, 0.7, (-PLOT_D / 2 + HOUSE_Z0) / 2), Color = Color3.fromRGB(205, 195, 175), Material = Enum.Material.Cobblestone, Parent = model })
-		for _, t in ipairs({ { -45, -55 }, { 45, -50 }, { -50, 20 }, { 52, 30 }, { -40, 62 }, { 40, 64 } }) do
+		for _, t in ipairs({ { -45, -55 }, { 45, -50 }, { -62, 10 }, { 63, 30 }, { -62, 58 }, { 62, 70 } }) do
 			part({ Name = "Trunk", Shape = Enum.PartType.Cylinder, Size = Vector3.new(8, 1.6, 1.6), CFrame = cf * CFrame.new(t[1], 4.6, t[2]) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(110, 75, 45), Material = Enum.Material.Wood, Parent = model })
 			part({ Name = "Leaves", Shape = Enum.PartType.Ball, Size = Vector3.new(9, 9, 9), CFrame = cf * CFrame.new(t[1], 10, t[2]), Color = Color3.fromRGB(80, 160, 70), Material = Enum.Material.Grass, Parent = model })
 		end
@@ -770,8 +766,9 @@ function PlotService.BuildStudentModel(uid, student, cf)
 end
 
 ---------------------------------------------------------------------------
--- Room props. Room frame: local X (u) runs from the hallway wall (u = 0) to
--- the outside wall (u = ROOM_U), local Z (v) along the hallway, Y = floor.
+-- Room props. Room frame: local X (u) runs from the furnished wall, usually
+-- the door wall (u = 0), to the back wall (u = ROOM_U); local Z (v) runs
+-- along it (-ROOM_V / 2 .. ROOM_V / 2); Y = floor.
 ---------------------------------------------------------------------------
 local WOOD = Color3.fromRGB(130, 90, 60)
 local DARK = Color3.fromRGB(40, 40, 50)
@@ -1037,7 +1034,7 @@ local function commonProps(m, r)
 	prop(m, r, 3, 1, -6, Vector3.new(2.6, 2, 2.6), Color3.fromRGB(230, 120, 60), { Shape = Enum.PartType.Ball, Material = Enum.Material.Fabric })
 end
 
--- Your own room (2 cells: v from -ROOM_V to +ROOM_V). The three boards hang
+-- Your own room (3 x 6 tiles, v from -ROOM_V / 2 to +ROOM_V / 2). The three boards hang
 -- on the outside wall; the bed, desk and wardrobe are always there.
 local function myRoomBasics(m, r)
 	bed(m, r * CFrame.new(4.5, 0.2, -12.2) * CFrame.Angles(0, math.pi, 0), Color3.fromRGB(255, 200, 80))
@@ -1109,26 +1106,116 @@ function FurnitureProps.trophy(m, r)
 end
 
 ---------------------------------------------------------------------------
--- House render
+-- House render: everything comes from the tile plan (shared/House.lua)
 ---------------------------------------------------------------------------
-local function roomFrame(plot, slotFloor, side, row, size)
-	local zc = HOUSE_Z0 + ROOM_V * (row + size / 2)
-	return PlotService.LocalCF(plot, side * HALL_W / 2, floorY(slotFloor), zc) * CFrame.Angles(0, side == 1 and 0 or math.pi, 0)
+local W, D, T = House.W, House.D, House.TILE
+local tid = House.id
+local UP = Vector3.new(0, 1, 0)
+-- which side of a wall line the face's owner tile is on (local Z of the line frame), per direction
+local FACE_SIGN = { -1, 1, 1, -1 }
+
+local function tileXZ(i)
+	return (i - 1) % W, (i - 1) // W
 end
 
--- where students and the client need to know about a room (world space)
-local function roomInfo(plot, rcf, key, slotFloor, size, hangout)
+-- plot-local studs of tile corners
+local function sx(x)
+	return House.X0 + x * T
+end
+local function sz(z)
+	return House.Z0 + z * T
+end
+
+local function dirIndex(dx, dz)
+	for k, d in ipairs(House.DIRS) do
+		if d[1] == dx and d[2] == dz then
+			return k
+		end
+	end
+	return 1
+end
+
+-- tile edge in direction k -> wall line number and position along it
+local function edgeOf(x, z, k)
+	if k == 1 then
+		return z + 1, x
+	elseif k == 3 then
+		return z, x
+	elseif k == 2 then
+		return x + 1, z
+	end
+	return x, z
+end
+
+-- frame of a wall line: local X runs along it, local Z crosses it
+local function lineFrame(k, line)
+	if k == 1 or k == 3 then
+		return CFrame.new(0, 0, sz(line))
+	end
+	return CFrame.new(sx(line), 0, 0) * ALONG_Z
+end
+
+local function alongStud(k, pos)
+	return (k == 1 or k == 3) and sx(pos) or sz(pos)
+end
+
+-- split a set of tile ids into rectangles { x, z, w, d }
+local function rects(set)
+	local used, out = {}, {}
+	for z = 0, D - 1 do
+		for x = 0, W - 1 do
+			local i = tid(x, z)
+			if set[i] and not used[i] then
+				local w = 1
+				while x + w < W and set[tid(x + w, z)] and not used[tid(x + w, z)] do
+					w += 1
+				end
+				local d = 1
+				while z + d < D do
+					local full = true
+					for k = 0, w - 1 do
+						local j = tid(x + k, z + d)
+						if not set[j] or used[j] then
+							full = false
+							break
+						end
+					end
+					if not full then
+						break
+					end
+					d += 1
+				end
+				for a = 0, w - 1 do
+					for b = 0, d - 1 do
+						used[tid(x + a, z + b)] = true
+					end
+				end
+				table.insert(out, { x = x, z = z, w = w, d = d })
+			end
+		end
+	end
+	return out
+end
+
+-- where students and the client need to know about a room (world space).
+-- rcf: room frame (u into the room, v along the furnished wall), dcf: the
+-- doorway, X pointing into the room.
+local function roomInfo(plot, key, r, door, hangout)
+	local fr = House.roomFrame(r, door, key)
+	local y = floorY(r.floor)
+	local rcf = plot.cf * CFrame.fromMatrix(Vector3.new(fr.x, y, fr.z), Vector3.new(fr.ux, 0, fr.uz), UP)
+	local dx, dz = House.doorPoint(door)
+	local dcf = plot.cf * CFrame.fromMatrix(Vector3.new(dx, y, dz), Vector3.new(-door.dx, 0, -door.dz), UP)
 	return {
 		key = key,
-		floor = slotFloor,
-		size = size,
+		floor = r.floor,
+		rect = r,
+		U = fr.U,
+		V = fr.V,
 		rcf = rcf,
-		center = (rcf * CFrame.new(ROOM_U * 0.36, 0, 0)).Position,
+		dcf = dcf,
 		u = rcf.XVector,
-		v = rcf.ZVector,
-		range = Vector3.new(ROOM_U * 0.22, 0, ROOM_V * size / 2 - 2.5),
-		door = (rcf * CFrame.new(1.5, 0, 0)).Position,
-		hall = (rcf * CFrame.new(-3, 0, 0)).Position,
+		backDir = dirIndex(fr.ux, fr.uz),
 		hangout = hangout,
 	}
 end
@@ -1137,114 +1224,10 @@ local function tagRoom(model, plot, info)
 	model:SetAttribute("PlotIndex", plot.index)
 	model:SetAttribute("Floor", info.floor)
 	model:SetAttribute("Key", info.key)
-	model:SetAttribute("Center", info.center)
-	model:SetAttribute("U", info.u)
-	model:SetAttribute("V", info.v)
-	model:SetAttribute("Range", info.range)
-	model:SetAttribute("Door", info.door)
-	model:SetAttribute("Hall", info.hall)
 	if info.hangout then
 		model:SetAttribute("Hangout", true)
 		CollectionService:AddTag(model, "HangoutRoom")
 	end
-end
-
--- floor, four walls (hallway wall has the door), a window per cell in the
--- outside wall. size = how many cells along the hallway the room spans.
-local function buildShell(m, rcf, row, side, size, wallStyle, floorStyle, hallStyle, opts)
-	local w = ROOM_V * size
-	part({ Name = "Floor", Size = Vector3.new(ROOM_U, 0.2, w), CFrame = rcf * CFrame.new(ROOM_U / 2, 0.1, 0), Style = floorStyle, Parent = m })
-	local inner = { Name = "Wall", Style = wallStyle }
-	local hallSide = { Name = "HallWall", Style = hallStyle }
-	local door = opts.door and { { c = 0, w = DOOR_W, b = 0, t = DOOR_H } } or nil
-	wall(m, rcf * CFrame.new(0.2, 0, 0) * ALONG_Z, -w / 2, w / 2, 0, WALL_H, 0.4, inner, door and table.clone(door))
-	wall(m, rcf * CFrame.new(-0.2, 0, 0) * ALONG_Z, -w / 2, w / 2, 0, WALL_H, 0.4, hallSide, door and table.clone(door))
-	local windows = nil
-	if opts.window ~= false then
-		windows = {}
-		for k = 0, size - 1 do
-			table.insert(windows, { c = -w / 2 + ROOM_V * (k + 0.5), w = 6, b = 3, t = 8 })
-		end
-	end
-	wall(m, rcf * CFrame.new(ROOM_U - 0.2, 0, 0) * ALONG_Z, -w / 2, w / 2, 0, WALL_H, 0.4, inner, windows)
-	-- side walls; the one at the front/back of the house gets a window
-	local front, back = -side * w / 2, side * w / 2
-	local sideWindows = {}
-	for _, v in ipairs({ front, back }) do
-		local outside = (v == front and row == 0) or (v == back and row + size - 1 == ROWS - 1)
-		local inset = v > 0 and v - 0.2 or v + 0.2
-		wall(m, rcf * CFrame.new(0, 0, inset), 0.4, ROOM_U - 0.4, 0, WALL_H, 0.4, inner, outside and { { c = ROOM_U / 2, w = 6, b = 3, t = 8 } } or nil)
-		if outside then
-			table.insert(sideWindows, v)
-		end
-	end
-	if opts.plain then
-		return
-	end
-
-	-- trim: baseboards and crown molding on every inside wall
-	local base = (wallStyle.color):Lerp(Color3.fromRGB(60, 40, 30), 0.55)
-	local function strip(name, size, u, h, v, color)
-		part({ Name = name, Size = size, CFrame = rcf * CFrame.new(u, h, v), Color = color, CanCollide = false, Parent = m })
-	end
-	for _, t in ipairs({ { "Baseboard", 0.3, 0.6, base }, { "Crown", WALL_H - 0.2, 0.4, TRIM } }) do
-		local name, h, tall, color = t[1], t[2], t[3], t[4]
-		strip(name, Vector3.new(0.14, tall, w - 0.8), ROOM_U - 0.47, h, 0, color)
-		strip(name, Vector3.new(ROOM_U - 0.8, tall, 0.14), ROOM_U / 2, h, -w / 2 + 0.47, color)
-		strip(name, Vector3.new(ROOM_U - 0.8, tall, 0.14), ROOM_U / 2, h, w / 2 - 0.47, color)
-		if opts.door and name == "Baseboard" then
-			local seg = (w - 0.8) / 2 - DOOR_W / 2 - 0.3
-			for _, sgn in ipairs({ -1, 1 }) do
-				strip(name, Vector3.new(0.14, tall, seg), 0.47, h, sgn * (DOOR_W / 2 + 0.3 + seg / 2), color)
-			end
-		else
-			strip(name, Vector3.new(0.14, tall, w - 0.8), 0.47, h, 0, color)
-		end
-	end
-
-	-- door frame on both faces, and the door standing open flat against the
-	-- hallway wall
-	if opts.door then
-		for _, sgn in ipairs({ -1, 1 }) do
-			strip("Jamb", Vector3.new(1.1, DOOR_H + 0.3, 0.3), 0, (DOOR_H + 0.3) / 2, sgn * (DOOR_W / 2 + 0.15), TRIM)
-		end
-		strip("DoorHeader", Vector3.new(1.1, 0.35, DOOR_W + 0.6), 0, DOOR_H + 0.17, 0, TRIM)
-		local leafW = DOOR_W - 0.2
-		local vc = DOOR_W / 2 + 0.35 + leafW / 2
-		strip("Door", Vector3.new(0.18, DOOR_H - 0.15, leafW), -0.52, (DOOR_H - 0.15) / 2, vc, Color3.fromRGB(150, 100, 65))
-		for _, h in ipairs({ 2, 5.2 }) do
-			strip("DoorPanel", Vector3.new(0.24, 2.4, leafW - 1.4), -0.54, h, vc, Color3.fromRGB(135, 88, 55))
-		end
-		part({ Name = "Knob", Shape = Enum.PartType.Ball, Size = Vector3.new(0.3, 0.3, 0.3), CFrame = rcf * CFrame.new(-0.7, 3.6, vc + leafW / 2 - 0.4), Color = Color3.fromRGB(230, 200, 90), Material = Enum.Material.Metal, CanCollide = false, Parent = m })
-	end
-
-	-- window trim and curtains
-	local curtain = opts.curtain or Color3.fromRGB(200, 80, 90)
-	for _, wnd in ipairs(windows or {}) do
-		local v = wnd.c
-		strip("Sill", Vector3.new(0.6, 0.25, 6.8), ROOM_U - 0.6, 2.9, v, TRIM)
-		strip("WindowTop", Vector3.new(0.25, 0.3, 6.6), ROOM_U - 0.5, 8.15, v, TRIM)
-		strip("CurtainRod", Vector3.new(0.12, 0.12, 9), ROOM_U - 0.75, 8.7, v, Color3.fromRGB(90, 70, 50))
-		for _, sgn in ipairs({ -1, 1 }) do
-			local c = part({ Name = "Curtain", Size = Vector3.new(0.12, 6.6, 1.5), CFrame = rcf * CFrame.new(ROOM_U - 0.8, 5.35, v + sgn * 3.7), Color = curtain, Material = Enum.Material.Fabric, CanCollide = false, Parent = m })
-			c:SetAttribute("Curtain", true)
-			strip("Tie", Vector3.new(0.2, 0.25, 1.6), ROOM_U - 0.82, 4, v + sgn * 3.7, curtain:Lerp(Color3.new(1, 1, 1), 0.4))
-		end
-	end
-	for _, v in ipairs(sideWindows) do
-		local inward = v > 0 and -1 or 1
-		strip("Sill", Vector3.new(6.8, 0.25, 0.6), ROOM_U / 2, 2.9, v + inward * 0.6, TRIM)
-		strip("WindowTop", Vector3.new(6.6, 0.3, 0.25), ROOM_U / 2, 8.15, v + inward * 0.5, TRIM)
-	end
-
-	-- ceiling light
-	local fixture = part({ Name = "CeilingLight", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 2.2, 2.2), CFrame = rcf * CFrame.new(ROOM_U / 2, WALL_H - 0.15, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(215, 205, 185), Material = Enum.Material.Neon, CanCollide = false, Parent = m })
-	local l = Instance.new("PointLight")
-	l.Range = 20
-	l.Brightness = opts.bright and 0.8 or 0.5
-	l.Color = Color3.fromRGB(255, 225, 180)
-	l.Shadows = false
-	l.Parent = fixture
 end
 
 local CURTAINS = {
@@ -1253,13 +1236,20 @@ local CURTAINS = {
 
 local function signature(plot, data)
 	local parts = { plot.owner.DisplayName, tostring(House.floorCount(data)) }
-	for _, p in ipairs(House.placements(data)) do
-		table.insert(parts, string.format("%s@%d,%d,%d,%d", p.key, p.floor, p.side, p.row, p.size))
-	end
-	for _, room in ipairs(data.rooms) do
-		table.insert(parts, tostring(room.tier))
+	for _, fp in ipairs(data.plan.floors) do
+		table.insert(parts, fp.hall .. (fp.support and "S" or ""))
 	end
 	local keys = {}
+	for f, s in pairs(data.plan.stairs) do
+		table.insert(keys, string.format("st%d@%d,%d,%d", f, s.x, s.z, s.dir))
+	end
+	for _, p in ipairs(House.placements(data)) do
+		local door = data.layout[p.key].door
+		table.insert(keys, string.format("%s@%d,%d,%d,%d,%d", p.key, p.floor, p.x, p.z, p.w, p.d) .. (door and string.format("/%d,%d,%d,%d", door.x, door.z, door.dx, door.dz) or ""))
+	end
+	for i, room in ipairs(data.rooms) do
+		table.insert(keys, "tier" .. i .. "=" .. room.tier)
+	end
 	for area, st in pairs(data.styles) do
 		table.insert(keys, area .. "=" .. tostring(st.wall) .. "/" .. tostring(st.floor) .. "/" .. tostring(st.roof))
 	end
@@ -1282,7 +1272,100 @@ local function levelFolder(parent, level)
 	return f
 end
 
--- Walls, floors, stairs, props: only rebuilt when the house itself changes.
+-- the plan as JSON on the house folder, so the client can walk students
+-- along the hallways (see client/Animator)
+local function publishPlan(plot, data)
+	local rooms = {}
+	for key, r in pairs(data.layout) do
+		rooms[key] = { f = r.floor, x = r.x, z = r.z, w = r.w, d = r.d, door = r.door }
+	end
+	local floors = {}
+	for f, fp in ipairs(data.plan.floors) do
+		floors[f] = fp.hall
+	end
+	local stairs = {}
+	for f = 1, House.floorCount(data) - 1 do
+		stairs[f] = data.plan.stairs[f]
+	end
+	plot.house:SetAttribute("Plan", HttpService:JSONEncode({ floors = floors, stairs = stairs, rooms = rooms }))
+	plot.house:SetAttribute("PlotIndex", plot.index)
+	CollectionService:AddTag(plot.house, "HousePlan")
+end
+
+-- room contents (ROOM_U / ROOM_V are set to the room's size first)
+local function furnish(m, info, data)
+	local rcf = info.rcf
+	local kind, index, fid = House.describe(info.key)
+	ROOM_U, ROOM_V = info.U, info.V
+	if kind == "me" then
+		m:SetAttribute("IsMyRoom", true)
+		myRoomBasics(m, rcf)
+		for id, shown in pairs(data.furniture) do
+			if shown and FurnitureProps[id] then
+				FurnitureProps[id](m, rcf)
+			end
+		end
+	elseif kind == "common" then
+		commonProps(m, rcf)
+	elseif kind == "facility" and FacilityProps[fid] then
+		FacilityProps[fid](m, rcf, data)
+	elseif kind == "dorm" then
+		local room = data.rooms[index]
+		if room and room.tier >= 2 then
+			cyl(m, rcf, ROOM_U * 0.4, 0.28, 0, 0.12, 6, Config.Looks.Artist.color, { Material = Enum.Material.Fabric })
+		end
+		if room and room.tier >= 3 then
+			-- a desk under the side wall and a wall picture
+			prop(m, rcf, 4.5, 2.6, -ROOM_V / 2 + 1.4, Vector3.new(3.2, 0.25, 1.6), BED_WOOD, { Material = Enum.Material.Wood })
+			prop(m, rcf, 4.5, 1.25, -ROOM_V / 2 + 1.4, Vector3.new(3, 2.5, 1.4), BED_WOOD:Lerp(Color3.new(0, 0, 0), 0.2), { Material = Enum.Material.Wood })
+			prop(m, rcf, 4.5, 3.1, -ROOM_V / 2 + 1.2, Vector3.new(1.2, 0.8, 0.08), DARK)
+			prop(m, rcf, ROOM_U / 2, 6.5, ROOM_V / 2 - 0.45, Vector3.new(3, 2.2, 0.1), Color3.fromRGB(120, 180, 230), { CanCollide = false })
+			prop(m, rcf, ROOM_U / 2, 6.5, ROOM_V / 2 - 0.42, Vector3.new(3.4, 2.6, 0.06), Color3.fromRGB(200, 160, 60), { CanCollide = false, Material = Enum.Material.Foil })
+		end
+		if room and room.tier >= 4 then
+			for _, v in ipairs({ -ROOM_V / 2 + 0.5, ROOM_V / 2 - 0.5 }) do
+				prop(m, rcf, ROOM_U / 2, WALL_H - 0.3, v, Vector3.new(ROOM_U - 1, 0.4, 0.3), Color3.fromRGB(255, 210, 60), { Material = Enum.Material.Neon, CanCollide = false })
+			end
+		end
+	end
+	-- ceiling light
+	local fixture = part({ Name = "CeilingLight", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.3, 2.2, 2.2), CFrame = rcf * CFrame.new(ROOM_U / 2, WALL_H - 0.15, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(215, 205, 185), Material = Enum.Material.Neon, CanCollide = false, Parent = m })
+	local l = Instance.new("PointLight")
+	l.Range = math.max(20, math.max(ROOM_U, ROOM_V) * 0.75)
+	l.Brightness = kind == "dorm" and 0.5 or 0.8
+	l.Color = Color3.fromRGB(255, 225, 180)
+	l.Shadows = false
+	l.Parent = fixture
+end
+
+-- door frame on both faces, and the door standing open flat against the hallway wall
+local function doorway(m, info, owner)
+	local dcf = info.dcf
+	local function strip(name, size, u, h, v, color)
+		part({ Name = name, Size = size, CFrame = dcf * CFrame.new(u, h, v), Color = color, CanCollide = false, Parent = m })
+	end
+	for _, sgn in ipairs({ -1, 1 }) do
+		strip("Jamb", Vector3.new(1.1, DOOR_H + 0.3, 0.3), 0, (DOOR_H + 0.3) / 2, sgn * (DOOR_W / 2 + 0.15), TRIM)
+	end
+	strip("DoorHeader", Vector3.new(1.1, 0.35, DOOR_W + 0.6), 0, DOOR_H + 0.17, 0, TRIM)
+	-- swing the leaf toward whichever side has hallway wall to rest on
+	local door = info.rect.door
+	local hx, hz = door.x + door.dx, door.z + door.dz
+	local side = 1
+	local nx, nz = hx + info.vPlot[1], hz + info.vPlot[2]
+	if not (House.inLot(nx, nz) and owner[tid(nx, nz)] == "hall") then
+		side = -1
+	end
+	local leafW = DOOR_W - 0.2
+	local vc = side * (DOOR_W / 2 + 0.35 + leafW / 2)
+	strip("Door", Vector3.new(0.18, DOOR_H - 0.15, leafW), -0.52, (DOOR_H - 0.15) / 2, vc, Color3.fromRGB(150, 100, 65))
+	for _, h in ipairs({ 2, 5.2 }) do
+		strip("DoorPanel", Vector3.new(0.24, 2.4, leafW - 1.4), -0.54, h, vc, Color3.fromRGB(135, 88, 55))
+	end
+	part({ Name = "Knob", Shape = Enum.PartType.Ball, Size = Vector3.new(0.3, 0.3, 0.3), CFrame = dcf * CFrame.new(-0.7, 3.6, vc + side * (leafW / 2 - 0.4)), Color = Color3.fromRGB(230, 200, 90), Material = Enum.Material.Metal, CanCollide = false, Parent = m })
+end
+
+-- Walls, floors, stairs, roofs, props: only rebuilt when the house itself changes.
 local function renderStructure(plot, data)
 	local root = plot.house
 	root:ClearAllChildren()
@@ -1292,285 +1375,532 @@ local function renderStructure(plot, data)
 		levels[f] = levelFolder(root, f)
 	end
 	local ext = House.style(data, "exterior", "wall")
-	local hall = House.style(data, "hall", "wall")
+	local roofStyle = House.style(data, "exterior", "roof")
+	local hallWall = House.style(data, "hall", "wall")
 	local hallFloor = House.style(data, "hall", "floor")
 	local concrete = { Color = Color3.fromRGB(200, 200, 205), Material = Enum.Material.Concrete }
 	local L = function(x, y, z)
 		return PlotService.LocalCF(plot, x, y, z)
 	end
-	local function slab(parent, x0, x1, z0, z1, y0, y1)
-		part({ Name = "Slab", Size = Vector3.new(x1 - x0, y1 - y0, z1 - z0), CFrame = L((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), Color = concrete.Color, Material = concrete.Material, Parent = parent })
+	local function slabRect(parent, r, y0, y1, name, style)
+		local x0, x1, z0, z1 = sx(r.x), sx(r.x + r.w), sz(r.z), sz(r.z + r.d)
+		local props = { Name = name or "Slab", Size = Vector3.new(x1 - x0, y1 - y0, z1 - z0), CFrame = L((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), Parent = parent }
+		if style then
+			props.Style = style
+		else
+			props.Color, props.Material = concrete.Color, concrete.Material
+		end
+		return part(props)
 	end
 	plot.rooms = {}
+	publishPlan(plot, data)
+
+	local owners, stairSets, wellSets, prints = {}, {}, {}, {}
+	for f = 0, floors - 1 do
+		owners[f], stairSets[f], wellSets[f] = House.owners(data, f)
+		prints[f] = House.footprint(data, f)
+	end
+	prints[floors] = {}
+	prints[-1] = {}
+	-- the whole top floor is one rectangle: it gets a gable roof
+	local topPrint, topCount = prints[floors - 1], 0
+	local bx0, bz0, bx1, bz1 = math.huge, math.huge, -math.huge, -math.huge
+	for i in pairs(topPrint) do
+		local x, z = tileXZ(i)
+		topCount += 1
+		bx0, bz0, bx1, bz1 = math.min(bx0, x), math.min(bz0, z), math.max(bx1, x), math.max(bz1, z)
+	end
+	local gable = topCount > 0 and topCount == (bx1 - bx0 + 1) * (bz1 - bz0 + 1)
+	local ent = House.entrance(data)
+	local sconceCount = 0
 
 	for f = 0, floors - 1 do
 		local lv = levels[f]
 		local y = floorY(f)
-		if f == 0 then
-			slab(lv, -HALF_X, HALF_X, HOUSE_Z0, HOUSE_Z1, GROUND_Y, y)
-			slab(lv, -HALL_W / 2, HALL_W / 2, HOUSE_Z1, TOWER_Z1, GROUND_Y, y)
-		else
-			slab(lv, -HALF_X, HALF_X, HOUSE_Z0, HOUSE_Z1, y - 1, y)
-			slab(lv, 0, HALL_W / 2, HOUSE_Z1, TOWER_Z1, y - 1, y)
-			slab(lv, -HALL_W / 2, 0, HOUSE_Z1, STAIR_Z0, y - 1, y)
-			slab(lv, -HALL_W / 2, 0, STAIR_Z1, TOWER_Z1, y - 1, y)
-		end
-		part({ Name = "HallFloor", Size = Vector3.new(HALL_W, 0.2, HOUSE_Z1 - HOUSE_Z0), CFrame = L(0, y + 0.1, (HOUSE_Z0 + HOUSE_Z1) / 2), Style = hallFloor, Parent = lv })
-		-- runner rug with a border, wall sconces between the doors
-		part({ Name = "Runner", Size = Vector3.new(4.4, 0.06, HOUSE_Z1 - HOUSE_Z0 - 4), CFrame = L(0, y + 0.23, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = Color3.fromRGB(200, 170, 90), Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
-		part({ Name = "Runner", Size = Vector3.new(3.6, 0.08, HOUSE_Z1 - HOUSE_Z0 - 4.8), CFrame = L(0, y + 0.24, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = Color3.fromRGB(150, 40, 50), Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
-		for r = 1, ROWS - 1 do
-			local z = HOUSE_Z0 + r * ROOM_V
-			for _, sd in ipairs({ -1, 1 }) do
-				local x = sd * (HALL_W / 2 - 0.5)
-				part({ Name = "SconcePlate", Size = Vector3.new(0.15, 1, 0.6), CFrame = L(x, y + 7, z), Color = Color3.fromRGB(200, 170, 90), Material = Enum.Material.Metal, CanCollide = false, Parent = lv })
-				local bulb = part({ Name = "Sconce", Shape = Enum.PartType.Ball, Size = Vector3.new(0.6, 0.6, 0.6), CFrame = L(x - sd * 0.35, y + 7.3, z), Color = Color3.fromRGB(255, 235, 190), Material = Enum.Material.Neon, CanCollide = false, Parent = lv })
-				if (r + (sd == 1 and 1 or 0)) % 2 == 0 then
-					local l = Instance.new("PointLight")
-					l.Range = 16
-					l.Brightness = 0.44
-					l.Color = Color3.fromRGB(255, 220, 170)
-					l.Shadows = false
-					l.Parent = bulb
+		local owner, stair, well = owners[f], stairSets[f], wellSets[f]
+		local h0 = f == 0 and GROUND_Y or y - 1
+		local h1 = y + WALL_H
+
+		-- slabs and floors
+		local solid, hallTiles, runnerTiles = {}, {}, {}
+		for i, o in pairs(owner) do
+			if not well[i] then
+				solid[i] = true
+				if o == "hall" then
+					hallTiles[i] = true
+					if not stair[i] then
+						runnerTiles[i] = true
+					end
 				end
 			end
 		end
-		-- outside: a trim band at every floor line
-		if f > 0 then
-			for _, b in ipairs({
-				{ HALF_X * 2 + 2, 0.6, HOUSE_Z0 - 0.75, 0 },
-				{ HALF_X * 2 + 2, 0.6, HOUSE_Z1 + 0.75, 0 },
-			}) do
-				part({ Name = "Band", Size = Vector3.new(b[1], b[2], 0.3), CFrame = L(b[4], y - 0.5, b[3]), Color = TRIM, CanCollide = false, Parent = lv })
-			end
-			for _, sd in ipairs({ -1, 1 }) do
-				part({ Name = "Band", Size = Vector3.new(0.3, 0.6, HOUSE_Z1 - HOUSE_Z0 + 1.8), CFrame = L(sd * (HALF_X + 0.75), y - 0.5, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = TRIM, CanCollide = false, Parent = lv })
+		for _, r in ipairs(rects(solid)) do
+			slabRect(lv, r, f == 0 and GROUND_Y or y - 1, y)
+		end
+		for _, r in ipairs(rects(hallTiles)) do
+			slabRect(lv, r, y, y + 0.2, "HallFloor", hallFloor)
+		end
+		for _, r in ipairs(rects(runnerTiles)) do
+			local long = math.max(r.w, r.d)
+			if long >= 3 then
+				local cx, cz = (sx(r.x) + sx(r.x + r.w)) / 2, (sz(r.z) + sz(r.z + r.d)) / 2
+				local wide = math.min(4.4, math.min(r.w, r.d) * T - 1.6)
+				local len = long * T - 4
+				local size = r.w >= r.d and Vector3.new(len, 0.06, wide) or Vector3.new(wide, 0.06, len)
+				local inner = r.w >= r.d and Vector3.new(len - 0.8, 0.08, wide - 0.8) or Vector3.new(wide - 0.8, 0.08, len - 0.8)
+				part({ Name = "Runner", Size = size, CFrame = L(cx, y + 0.23, cz), Color = Color3.fromRGB(200, 170, 90), Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
+				part({ Name = "Runner", Size = inner, CFrame = L(cx, y + 0.24, cz), Color = Color3.fromRGB(150, 40, 50), Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
 			end
 		end
 
-		-- outside walls (cover the slab edge too)
-		local h0 = f == 0 and GROUND_Y or y - 1
-		local h1 = floorY(f + 1) - 1
-		local wb, wt = y + 3, y + 8
-		local exProps = { Name = "Outside", Style = ext }
-		local frontHoles = { { c = -(HALL_W / 2 + ROOM_U / 2), w = 6, b = wb, t = wt, glass = true, out = -1 }, { c = HALL_W / 2 + ROOM_U / 2, w = 6, b = wb, t = wt, glass = true, out = -1 } }
-		if f == 0 then
-			table.insert(frontHoles, { c = 0, w = 6, b = h0, t = y + DOOR_H + 0.5 })
-		else
-			table.insert(frontHoles, { c = 0, w = 6, b = wb, t = wt, glass = true, out = -1 })
-		end
-		wall(lv, L(0, 0, HOUSE_Z0 - 0.3), -HALF_X - 0.6, HALF_X + 0.6, h0, h1, 0.6, exProps, frontHoles)
-		for _, side in ipairs({ -1, 1 }) do
-			local holes = {}
-			for r = 0, ROWS - 1 do
-				table.insert(holes, { c = HOUSE_Z0 + ROOM_V * (r + 0.5), w = 6, b = wb, t = wt, glass = true, out = -side })
+		-- rooms on this floor
+		local doorAt = {}
+		local infos = {}
+		for key, r in pairs(data.layout) do
+			if r.floor == f then
+				local door = House.door(data, key, owner, stair, well)
+				if door then
+					r.door = { x = door.x, z = door.z, dx = door.dx, dz = door.dz }
+					local k = dirIndex(door.dx, door.dz)
+					local line, pos = edgeOf(door.x, door.z, k)
+					doorAt[k .. ":" .. line .. ":" .. pos] = true
+					local back = (k + 1) % 4 + 1
+					line, pos = edgeOf(door.x + door.dx, door.z + door.dz, back)
+					doorAt[back .. ":" .. line .. ":" .. pos] = true
+					local kind = House.describe(key)
+					local info = roomInfo(plot, key, r, door, kind == "common" or kind == "facility")
+					-- +v of the doorway in plot tiles (for the door leaf)
+					info.vPlot = { door.dz, -door.dx }
+					infos[key] = info
+					plot.rooms[key] = info
+				end
 			end
-			wall(lv, L(side * (HALF_X + 0.3), 0, 0) * ALONG_Z, HOUSE_Z0, HOUSE_Z1 + 0.6, h0, h1, 0.6, exProps, holes)
-			-- back of the room block, beside the stairwell
-			local xa, xb = side * (HALL_W / 2 + 0.6), side * (HALF_X + 0.6)
-			local mid = (xa + xb) / 2
-			wall(lv, L(mid, 0, HOUSE_Z1 + 0.3), -math.abs(xb - xa) / 2, math.abs(xb - xa) / 2, h0, h1, 0.6, exProps, { { c = side * (HALL_W / 2 + ROOM_U / 2) - mid, w = 6, b = wb, t = wt, glass = true, out = 1 } })
-			-- stairwell sides
-			wall(lv, L(side * (HALL_W / 2 + 0.3), 0, 0) * ALONG_Z, HOUSE_Z1, TOWER_Z1 + 0.6, h0, h1, 0.6, exProps)
 		end
-		wall(lv, L(0, 0, TOWER_Z1 + 0.3), -HALL_W / 2 - 0.6, HALL_W / 2 + 0.6, h0, h1, 0.6, exProps, { { c = HALL_W / 4, w = 3, b = wb, t = wt, glass = true, out = 1 } })
+
+		-- walls: one run per straight stretch between two different owners
+		local byLine = {}
+		for i, own in pairs(owner) do
+			local x, z = tileXZ(i)
+			for k, d in ipairs(House.DIRS) do
+				local nx, nz = x + d[1], z + d[2]
+				local nb = House.inLot(nx, nz) and owner[tid(nx, nz)] or nil
+				if nb ~= own then
+					local line, pos = edgeOf(x, z, k)
+					byLine[k] = byLine[k] or {}
+					byLine[k][line] = byLine[k][line] or {}
+					byLine[k][line][pos] = { own = own, nb = nb, x = x, z = z, nx = nx, nz = nz }
+				end
+			end
+		end
+		local runs = {}
+		for k = 1, 4 do
+			for line, faces in pairs(byLine[k] or {}) do
+				local cur = nil
+				for pos = 0, math.max(W, D) do
+					local fc = faces[pos]
+					if fc and cur and cur.own == fc.own and cur.nb == fc.nb and cur.b == pos then
+						cur.b = pos + 1
+						table.insert(cur.tiles, fc)
+					elseif fc then
+						cur = { k = k, line = line, a = pos, b = pos + 1, own = fc.own, nb = fc.nb, tiles = { fc } }
+						table.insert(runs, cur)
+					else
+						cur = nil
+					end
+				end
+			end
+		end
+
+		local exProps = { Name = "Outside", Style = ext }
+		for _, run in ipairs(runs) do
+			local k, s = run.k, FACE_SIGN[run.k]
+			local F = plot.cf * lineFrame(k, run.line)
+			local A0, A1 = alongStud(k, run.a), alongStud(k, run.b)
+			local isRoom = run.own ~= "hall"
+			local info = isRoom and infos[run.own]
+			local doors = {}
+			for pos = run.a, run.b - 1 do
+				if doorAt[k .. ":" .. run.line .. ":" .. pos] then
+					table.insert(doors, { c = alongStud(k, pos) + T / 2, w = DOOR_W, b = y, t = y + DOOR_H })
+				end
+			end
+			local entrance = nil
+			if f == 0 and ent and k == 3 and run.line == ent.z and run.own == "hall" and run.nb == nil and run.a <= ent.x0 and run.b > ent.x1 then
+				entrance = { c = (sx(ent.x0) + sx(ent.x1 + 1)) / 2, w = 6, b = y, t = y + DOOR_H + 0.5 }
+			end
+			local windows = {}
+			if run.nb == nil then
+				local kind = isRoom and House.describe(run.own)
+				local blank = info and kind ~= "dorm" and info.backDir == k -- props and boards hang on the back wall
+				if not blank then
+					local n = math.max(1, (run.b - run.a) // 2)
+					local seg = (A1 - A0) / n
+					for j = 1, n do
+						local c = A0 + (j - 0.5) * seg
+						if not (entrance and math.abs(c - entrance.c) < 6.5) then
+							table.insert(windows, { c = c, w = run.b - run.a == 1 and 3 or 4, b = y + 3, t = y + 8 })
+						end
+					end
+				end
+			end
+
+			-- inside face
+			local holes = {}
+			for _, h in ipairs(doors) do
+				table.insert(holes, table.clone(h))
+			end
+			for _, h in ipairs(windows) do
+				table.insert(holes, table.clone(h))
+			end
+			if entrance then
+				table.insert(holes, table.clone(entrance))
+			end
+			local faceStyle = isRoom and House.style(data, run.own, "wall") or hallWall
+			wall(lv, F * CFrame.new(0, 0, s * 0.1), A0, A1, y, h1, 0.2, { Name = isRoom and "Wall" or "HallWall", Style = faceStyle }, holes)
+
+			-- outside wall, foundation, floor bands and the parapet of flat roofs
+			if run.nb == nil then
+				local outHoles = {}
+				for _, h in ipairs(windows) do
+					local o = table.clone(h)
+					o.glass, o.out = true, -s
+					table.insert(outHoles, o)
+				end
+				if entrance then
+					local o = table.clone(entrance)
+					o.b = h0
+					table.insert(outHoles, o)
+				end
+				wall(lv, F * CFrame.new(0, 0, -s * 0.3), A0, A1, h0, h1, 0.6, exProps, outHoles)
+				local function strip(name, a0, a1, hc, tall, thick, out, props)
+					if a1 - a0 < 0.05 then
+						return
+					end
+					local p = table.clone(props)
+					p.Name, p.Size, p.CFrame, p.CanCollide, p.Parent = name, Vector3.new(a1 - a0, tall, thick), F * CFrame.new((a0 + a1) / 2, hc, -s * out), false, lv
+					part(p)
+				end
+				if f == 0 then
+					local stone = { Color = Color3.fromRGB(150, 145, 140), Material = Enum.Material.Cobblestone }
+					if entrance then
+						strip("Foundation", A0, entrance.c - entrance.w / 2, GROUND_Y + 0.6, 1.2, 0.5, 0.85, stone)
+						strip("Foundation", entrance.c + entrance.w / 2, A1, GROUND_Y + 0.6, 1.2, 0.5, 0.85, stone)
+					else
+						strip("Foundation", A0, A1, GROUND_Y + 0.6, 1.2, 0.5, 0.85, stone)
+					end
+				else
+					strip("Band", A0, A1, y - 0.5, 0.6, 0.3, 0.75, { Color = TRIM })
+				end
+				local roofHere = f < floors - 1 or not gable
+				for idx, fc in ipairs(run.tiles) do
+					local i = tid(fc.x, fc.z)
+					local nbAbove = House.inLot(fc.nx, fc.nz) and prints[f + 1][tid(fc.nx, fc.nz)]
+					if roofHere and not prints[f + 1][i] and not nbAbove then
+						local a = alongStud(k, run.a + idx - 1)
+						strip("Parapet", a, a + T, h1 + 1, 2, 0.6, 0.3, { Color = TRIM })
+					end
+				end
+			end
+
+			-- trim inside rooms: baseboards around the doors, crown molding, curtains
+			if isRoom then
+				local base = faceStyle.color:Lerp(Color3.fromRGB(60, 40, 30), 0.55)
+				local function strip(name, a0, a1, hc, tall, inset, color)
+					if a1 - a0 < 0.05 then
+						return
+					end
+					part({ Name = name, Size = Vector3.new(a1 - a0, tall, 0.14), CFrame = F * CFrame.new((a0 + a1) / 2, hc, s * inset), Color = color, CanCollide = false, Parent = lv })
+				end
+				local x = A0
+				table.sort(doors, function(p, q)
+					return p.c < q.c
+				end)
+				for _, h in ipairs(doors) do
+					strip("Baseboard", x, h.c - h.w / 2 - 0.3, y + 0.3, 0.6, 0.27, base)
+					x = h.c + h.w / 2 + 0.3
+				end
+				strip("Baseboard", x, A1, y + 0.3, 0.6, 0.27, base)
+				strip("Crown", A0, A1, y + WALL_H - 0.2, 0.4, 0.27, TRIM)
+				local curtain = CURTAINS[(#run.own * 7 + run.line * 3 + f) % #CURTAINS + 1]
+				for _, wnd in ipairs(windows) do
+					local c, ww = wnd.c, wnd.w
+					part({ Name = "Sill", Size = Vector3.new(ww + 0.8, 0.25, 0.6), CFrame = F * CFrame.new(c, y + 2.9, s * 0.5), Color = TRIM, CanCollide = false, Parent = lv })
+					part({ Name = "WindowTop", Size = Vector3.new(ww + 0.6, 0.3, 0.25), CFrame = F * CFrame.new(c, y + 8.15, s * 0.32), Color = TRIM, CanCollide = false, Parent = lv })
+					part({ Name = "CurtainRod", Size = Vector3.new(ww + 3, 0.12, 0.12), CFrame = F * CFrame.new(c, y + 8.7, s * 0.55), Color = Color3.fromRGB(90, 70, 50), CanCollide = false, Parent = lv })
+					for _, sgn in ipairs({ -1, 1 }) do
+						local cp = part({ Name = "Curtain", Size = Vector3.new(1.3, 6.6, 0.12), CFrame = F * CFrame.new(c + sgn * (ww / 2 + 0.6), y + 5.35, s * 0.62), Color = curtain, Material = Enum.Material.Fabric, CanCollide = false, Parent = lv })
+						cp:SetAttribute("Curtain", true)
+						part({ Name = "Tie", Size = Vector3.new(1.4, 0.25, 0.2), CFrame = F * CFrame.new(c + sgn * (ww / 2 + 0.6), y + 4, s * 0.64), Color = curtain:Lerp(Color3.new(1, 1, 1), 0.4), CanCollide = false, Parent = lv })
+					end
+				end
+			elseif run.b - run.a >= 2 then
+				-- hallway sconces every two tiles, clear of the doors
+				for pos = run.a + 1, run.b - 1, 2 do
+					local c = alongStud(k, pos)
+					local clear = true
+					for _, h in ipairs(doors) do
+						if math.abs(h.c - c) < h.w / 2 + 1 then
+							clear = false
+						end
+					end
+					if entrance and math.abs(entrance.c - c) < 4 then
+						clear = false
+					end
+					if clear then
+						sconceCount += 1
+						part({ Name = "SconcePlate", Size = Vector3.new(0.6, 1, 0.15), CFrame = F * CFrame.new(c, y + 7, s * 0.28), Color = Color3.fromRGB(200, 170, 90), Material = Enum.Material.Metal, CanCollide = false, Parent = lv })
+						local bulb = part({ Name = "Sconce", Shape = Enum.PartType.Ball, Size = Vector3.new(0.6, 0.6, 0.6), CFrame = F * CFrame.new(c, y + 7.3, s * 0.6), Color = Color3.fromRGB(255, 235, 190), Material = Enum.Material.Neon, CanCollide = false, Parent = lv })
+						if sconceCount % 2 == 0 then
+							local l = Instance.new("PointLight")
+							l.Range = 16
+							l.Brightness = 0.44
+							l.Color = Color3.fromRGB(255, 220, 170)
+							l.Shadows = false
+							l.Parent = bulb
+						end
+					end
+				end
+			end
+		end
+
+		-- outside corners get a post to close the gap between wall runs
+		local fp = prints[f]
+		for vx = 0, W do
+			for vz = 0, D do
+				local a = House.inLot(vx - 1, vz - 1) and fp[tid(vx - 1, vz - 1)] or false
+				local b = House.inLot(vx, vz - 1) and fp[tid(vx, vz - 1)] or false
+				local c = House.inLot(vx - 1, vz) and fp[tid(vx - 1, vz)] or false
+				local d = House.inLot(vx, vz) and fp[tid(vx, vz)] or false
+				local n = (a and 1 or 0) + (b and 1 or 0) + (c and 1 or 0) + (d and 1 or 0)
+				if n == 1 or (n == 2 and a == d) or n == 3 then
+					part({ Name = "Corner", Size = Vector3.new(1.3, h1 - h0, 1.3), CFrame = L(sx(vx), (h0 + h1) / 2, sz(vz)), Color = TRIM, Parent = lv })
+				end
+			end
+		end
+
+		-- columns under the parts of this floor that hang out past the floor below
+		if f > 0 then
+			local below = prints[f - 1]
+			for vx = 0, W do
+				for vz = 0, D do
+					local around = { { vx - 1, vz - 1 }, { vx, vz - 1 }, { vx - 1, vz }, { vx, vz } }
+					local mine, under = 0, false
+					for _, t in ipairs(around) do
+						if House.inLot(t[1], t[2]) then
+							local i = tid(t[1], t[2])
+							if fp[i] then
+								mine += 1
+							end
+							if below[i] then
+								under = true
+							end
+						end
+					end
+					if mine > 0 and mine < 4 and not under and ((vx + vz) % 2 == 0 or mine == 1) then
+						-- stand on the highest roof under this corner, or the ground
+						local base = GROUND_Y
+						for g = f - 2, 0, -1 do
+							local hit = false
+							for _, t in ipairs(around) do
+								if House.inLot(t[1], t[2]) and prints[g][tid(t[1], t[2])] then
+									hit = true
+								end
+							end
+							if hit then
+								base = floorY(g + 1) + 0.2
+								break
+							end
+						end
+						local top = y - 1
+						part({ Name = "Column", Size = Vector3.new(1.2, top - base, 1.2), CFrame = L(sx(vx), (base + top) / 2, sz(vz)), Color = TRIM, Material = Enum.Material.Marble, Parent = lv })
+						part({ Name = "ColumnFoot", Size = Vector3.new(1.8, 0.5, 1.8), CFrame = L(sx(vx), base + 0.25, sz(vz)), Color = TRIM:Lerp(Color3.new(0, 0, 0), 0.15), Parent = lv })
+					end
+				end
+			end
+		end
 
 		-- stairs up: an invisible ramp you walk on, with open steps drawn over it
-		local rail = { Name = "Rail", Color = Color3.fromRGB(190, 230, 255), Material = Enum.Material.Glass, Transparency = 0.5 }
-		if f < floors - 1 then
-			local run, rise = STAIR_Z1 - STAIR_Z0, FLOOR_H
+		local glass = { Name = "Rail", Color = Color3.fromRGB(190, 230, 255), Material = Enum.Material.Glass, Transparency = 0.5 }
+		local up = House.stairs(data, f)
+		if up and f < floors - 1 then
+			local d = House.DIRS[up.dir] or House.DIRS[1]
+			local run, rise = House.StairLen * T, FLOOR_H
+			local mid = up.tiles[2]
+			local cx, cz = House.tileCenter(mid[1], mid[2])
+			local side = Vector3.new(d[2], 0, -d[1])
+			local base = CFrame.fromMatrix(Vector3.new(cx, 0, cz), side, UP) -- local Z runs up the stairs
 			local angle = math.atan2(rise, run)
 			part({
 				Name = "Ramp",
-				Size = Vector3.new(HALL_W / 2, 0.5, math.sqrt(run * run + rise * rise) + 0.6),
-				CFrame = L(-HALL_W / 4, y + rise / 2, (STAIR_Z0 + STAIR_Z1) / 2) * CFrame.Angles(-angle, 0, 0) * CFrame.new(0, -0.25, 0),
+				Size = Vector3.new(T - 0.4, 0.5, math.sqrt(run * run + rise * rise) + 0.6),
+				CFrame = plot.cf * base * CFrame.new(0, y + rise / 2, 0) * CFrame.Angles(-angle, 0, 0) * CFrame.new(0, -0.25, 0),
 				Transparency = 1,
 				Parent = lv,
 			})
 			local steps = 12
 			for i = 1, steps do
 				local top = y + (i - 0.5) * rise / steps
-				part({ Name = "Step", Size = Vector3.new(HALL_W / 2 - 0.4, 0.5, run / steps), CFrame = L(-HALL_W / 4, top - 0.25, STAIR_Z0 + (i - 0.5) * run / steps), Color = WOOD, Material = Enum.Material.WoodPlanks, CanCollide = false, Parent = lv })
+				part({ Name = "Step", Size = Vector3.new(T - 0.4, 0.5, run / steps), CFrame = plot.cf * base * CFrame.new(0, top - 0.25, -run / 2 + (i - 0.5) * run / steps), Color = WOOD, Material = Enum.Material.WoodPlanks, CanCollide = false, Parent = lv })
 			end
-			local r = table.clone(rail)
-			r.Size = Vector3.new(0.3, 3, run)
-			r.CFrame = L(0, y + 1.5, (STAIR_Z0 + STAIR_Z1) / 2)
-			r.Parent = lv
-			part(r)
-		end
-		if f > 0 and f == floors - 1 then
-			-- top floor: fence off the stairwell opening
-			local r = table.clone(rail)
-			r.Size = Vector3.new(0.3, 3, STAIR_Z1 - STAIR_Z0)
-			r.CFrame = L(0, y + 1.5, (STAIR_Z0 + STAIR_Z1) / 2)
-			r.Parent = lv
-			part(r)
-			local cap = table.clone(rail)
-			cap.Size = Vector3.new(HALL_W / 2, 3, 0.3)
-			cap.CFrame = L(-HALL_W / 4, y + 1.5, STAIR_Z0)
-			cap.Parent = lv
-			part(cap)
-		end
-
-		-- the hallway is a hangout spot too
-		local hallModel = Instance.new("Model")
-		hallModel.Name = "Hallway"
-		hallModel.Parent = lv
-		tagRoom(hallModel, plot, {
-			key = "hall" .. f,
-			floor = f,
-			center = L(0, y, (HOUSE_Z0 + HOUSE_Z1) / 2).Position,
-			u = plot.cf.XVector,
-			v = plot.cf.ZVector,
-			range = Vector3.new(HALL_W / 2 - 2, 0, (HOUSE_Z1 - HOUSE_Z0) / 2 - 3),
-			door = L(0, y, (HOUSE_Z0 + HOUSE_Z1) / 2).Position,
-			hall = L(0, y, (HOUSE_Z0 + HOUSE_Z1) / 2).Position,
-			hangout = true,
-		})
-		hallModel:SetAttribute("IsHall", true)
-	end
-
-	-- foundation, corner posts, front porch
-	local g = levels[0]
-	local stone = { Color = Color3.fromRGB(150, 145, 140), Material = Enum.Material.Cobblestone }
-	local function block(parent, name, size, x, y, z, props)
-		local p = table.clone(props)
-		p.Name, p.Size, p.CFrame, p.Parent = name, size, L(x, y, z), parent
-		return part(p)
-	end
-	block(g, "Foundation", Vector3.new(HALF_X * 2 + 2, 1.2, 0.5), 0, GROUND_Y + 0.6, HOUSE_Z0 - 0.8, stone)
-	block(g, "Foundation", Vector3.new(HALF_X * 2 + 2, 1.2, 0.5), 0, GROUND_Y + 0.6, HOUSE_Z1 + 0.85, stone)
-	for _, sd in ipairs({ -1, 1 }) do
-		block(g, "Foundation", Vector3.new(0.5, 1.2, HOUSE_Z1 - HOUSE_Z0 + 2), sd * (HALF_X + 0.8), GROUND_Y + 0.6, (HOUSE_Z0 + HOUSE_Z1) / 2, stone)
-		block(g, "Foundation", Vector3.new(0.5, 1.2, TOWER_Z1 - HOUSE_Z1 + 1), sd * (HALL_W / 2 + 0.8), GROUND_Y + 0.6, (HOUSE_Z1 + TOWER_Z1) / 2 + 0.5, stone)
-	end
-	local tall = floorY(floors) - 1 - GROUND_Y
-	for _, c in ipairs({ { -1, HOUSE_Z0 }, { 1, HOUSE_Z0 }, { -1, HOUSE_Z1 }, { 1, HOUSE_Z1 } }) do
-		block(g, "Corner", Vector3.new(1.3, tall, 1.3), c[1] * (HALF_X + 0.5), GROUND_Y + tall / 2, c[2] + (c[2] < 0 and -0.5 or 0.5), { Color = TRIM })
-	end
-	-- porch: steps, a little roof on posts, two lanterns
-	local trimP = { Color = TRIM }
-	block(g, "Step", Vector3.new(9, 0.3, 4), 0, GROUND_Y + 0.15, HOUSE_Z0 - 2.6, stone)
-	block(g, "Step", Vector3.new(8, 0.3, 2), 0, GROUND_Y + 0.45, HOUSE_Z0 - 1.6, stone)
-	block(g, "PorchRoof", Vector3.new(10, 0.5, 4.6), 0, floorY(0) + DOOR_H + 1.2, HOUSE_Z0 - 2.6, { Color = Color3.fromRGB(90, 60, 45), Material = Enum.Material.WoodPlanks })
-	block(g, "PorchTrim", Vector3.new(10.4, 0.3, 0.3), 0, floorY(0) + DOOR_H + 0.85, HOUSE_Z0 - 4.8, trimP)
-	for _, sd in ipairs({ -1, 1 }) do
-		block(g, "PorchPost", Vector3.new(0.5, DOOR_H + 1.4, 0.5), sd * 4.5, floorY(0) + (DOOR_H + 1.4) / 2, HOUSE_Z0 - 4.5, trimP)
-		block(g, "DoorJamb", Vector3.new(0.6, DOOR_H + 0.9, 0.9), sd * 3.3, floorY(0) + (DOOR_H + 0.9) / 2 - 0.6, HOUSE_Z0 - 0.3, trimP)
-		local lantern = block(g, "Lantern", Vector3.new(0.6, 0.9, 0.6), sd * 4.3, floorY(0) + 6, HOUSE_Z0 - 0.9, { Color = Color3.fromRGB(255, 220, 150), Material = Enum.Material.Neon })
-		block(g, "LanternCap", Vector3.new(0.8, 0.2, 0.8), sd * 4.3, floorY(0) + 6.55, HOUSE_Z0 - 0.9, { Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal })
-		local l = Instance.new("PointLight")
-		l.Range = 14
-		l.Brightness = 0.55
-		l.Color = Color3.fromRGB(255, 210, 150)
-		l.Parent = lantern
-	end
-	block(g, "DoorHeader", Vector3.new(7.2, 0.6, 0.9), 0, floorY(0) + DOOR_H + 0.3, HOUSE_Z0 - 0.3, trimP)
-	block(g, "Doormat", Vector3.new(4, 0.08, 2.4), 0, GROUND_Y + 0.64, HOUSE_Z0 - 1.6, { Color = Color3.fromRGB(150, 110, 70), Material = Enum.Material.Fabric, CanCollide = false })
-
-	-- rooms: walk every cell of every floor
-	local grid = House.grid(data)
-	for f = 0, floors - 1 do
-		for _, side in ipairs({ -1, 1 }) do
-			for row = 0, ROWS - 1 do
-				local s = grid[f][side][row]
-				local m = Instance.new("Model")
-				m.Parent = levels[f]
-				if not s then
-					m.Name = "EmptyCell"
-					local rcf = roomFrame(plot, f, side, row, 1)
-					buildShell(m, rcf, row, side, 1, hall, hallFloor, hall, { door = false, plain = true })
-					local plate = part({ Name = "Plate", Size = Vector3.new(0.1, 1.6, 6), CFrame = rcf * CFrame.new(-0.45, 5, 0), Color = Color3.fromRGB(250, 220, 120), Parent = m })
-					local sg = surface(plate, Enum.NormalId.Left, Vector2.new(600, 160))
-					label(sg, "🚧 Empty: plan it on your layout board", Color3.fromRGB(60, 40, 30)).TextStrokeTransparency = 1
-				elseif s.row ~= row then
-					m:Destroy() -- second cell of a big room, already built
-				else
-					m.Name = s.key
-					local rcf = roomFrame(plot, f, side, row, s.size)
-					local wallStyle = House.style(data, s.key, "wall")
-					local floorStyle = House.style(data, s.key, "floor")
-					local isMe = s.kind == "me"
-					local tier = s.kind == "dorm" and data.rooms[s.index] and data.rooms[s.index].tier or 1
-					buildShell(m, rcf, row, side, s.size, wallStyle, floorStyle, hall, { door = true, window = not (isMe or s.kind == "common"), curtain = CURTAINS[(#s.key * 7 + row * 3 + f) % #CURTAINS + 1], bright = tier >= 3 or s.kind ~= "dorm" })
-					local info = roomInfo(plot, rcf, s.key, f, s.size, s.kind == "common" or s.kind == "facility")
-					plot.rooms[s.key] = info
-					tagRoom(m, plot, info)
-					CollectionService:AddTag(m, "HouseRoom")
-					if isMe then
-						m:SetAttribute("IsMyRoom", true)
-						m:SetAttribute("OwnerUserId", plot.owner.UserId)
-						myRoomBasics(m, rcf)
-						for id, shown in pairs(data.furniture) do
-							if shown and FurnitureProps[id] then
-								FurnitureProps[id](m, rcf)
-							end
-						end
-					elseif s.kind == "common" then
-						commonProps(m, rcf)
-					elseif s.kind == "facility" and FacilityProps[s.id] then
-						FacilityProps[s.id](m, rcf, data)
-						for _, sp in ipairs(m:GetDescendants()) do
-							if sp:GetAttribute("UseTags") then
-								sp:SetAttribute("PlotIndex", plot.index)
-								sp:SetAttribute("Floor", info.floor)
-								CollectionService:AddTag(sp, "UseSpot")
-							end
-						end
-					elseif s.kind == "dorm" then
-						local room = data.rooms[s.index]
-						if room and room.tier >= 2 then
-							cyl(m, rcf, 7, 0.28, 0, 0.12, 6, Config.Looks.Artist.color, { Material = Enum.Material.Fabric })
-						end
-						if room and room.tier >= 3 then
-							-- a desk under the side wall and a wall picture
-							prop(m, rcf, 4.5, 2.6, -ROOM_V * s.size / 2 + 1.4, Vector3.new(3.2, 0.25, 1.6), BED_WOOD, { Material = Enum.Material.Wood })
-							prop(m, rcf, 4.5, 1.25, -ROOM_V * s.size / 2 + 1.4, Vector3.new(3, 2.5, 1.4), BED_WOOD:Lerp(Color3.new(0, 0, 0), 0.2), { Material = Enum.Material.Wood })
-							prop(m, rcf, 4.5, 3.1, -ROOM_V * s.size / 2 + 1.2, Vector3.new(1.2, 0.8, 0.08), DARK)
-							prop(m, rcf, 9, 6.5, ROOM_V * s.size / 2 - 0.45, Vector3.new(3, 2.2, 0.1), Color3.fromRGB(120, 180, 230), { CanCollide = false })
-							prop(m, rcf, 9, 6.5, ROOM_V * s.size / 2 - 0.42, Vector3.new(3.4, 2.6, 0.06), Color3.fromRGB(200, 160, 60), { CanCollide = false, Material = Enum.Material.Foil })
-						end
-						if room and room.tier >= 4 then
-							local w = ROOM_V * s.size
-							for _, v in ipairs({ -w / 2 + 0.5, w / 2 - 0.5 }) do
-								prop(m, rcf, ROOM_U / 2, WALL_H - 0.3, v, Vector3.new(ROOM_U - 1, 0.4, 0.3), Color3.fromRGB(255, 210, 60), { Material = Enum.Material.Neon, CanCollide = false })
-							end
-						end
+			-- glass rails on the open sides, following the slope
+			for idx, t in ipairs(up.tiles) do
+				for _, sgn in ipairs({ -1, 1 }) do
+					local nx, nz = t[1] + sgn * side.X, t[2] + sgn * side.Z
+					local n = House.inLot(nx, nz) and tid(nx, nz)
+					if n and owner[n] == "hall" and not stair[n] then
+						local r = table.clone(glass)
+						r.Size = Vector3.new(0.3, 3, T)
+						r.CFrame = plot.cf * base * CFrame.new(sgn * T / 2, y + rise * (idx - 0.5) / House.StairLen + 1.5, (idx - 2) * T)
+						r.Parent = lv
+						part(r)
+					end
+				end
+			end
+			-- railings around the stairwell upstairs, open at the landing
+			local g = f + 1
+			local yg = floorY(g)
+			local upper = owners[g]
+			local wellSet = {}
+			for _, t in ipairs(up.tiles) do
+				wellSet[tid(t[1], t[2])] = true
+			end
+			for idx, t in ipairs(up.tiles) do
+				for k, dd in ipairs(House.DIRS) do
+					local nx, nz = t[1] + dd[1], t[2] + dd[2]
+					local n = House.inLot(nx, nz) and tid(nx, nz)
+					local landing = idx == House.StairLen and dd[1] == d[1] and dd[2] == d[2]
+					if n and not wellSet[n] and upper[n] == "hall" and not landing then
+						local line, pos = edgeOf(t[1], t[2], k)
+						local r = table.clone(glass)
+						r.Size = Vector3.new(T, 3, 0.3)
+						r.CFrame = plot.cf * lineFrame(k, line) * CFrame.new(alongStud(k, pos) + T / 2, yg + 1.5, 0)
+						r.Parent = levels[g]
+						part(r)
 					end
 				end
 			end
 		end
-	end
 
-	-- roof
-	local lv = levels[floors]
-	local top = floorY(floors) - 1
-	local roof = House.style(data, "exterior", "roof")
-	slab(lv, -HALF_X - 0.6, HALF_X + 0.6, HOUSE_Z0 - 0.6, HOUSE_Z1 + 0.6, top, top + 1)
-	slab(lv, -HALL_W / 2 - 0.6, HALL_W / 2 + 0.6, HOUSE_Z1, TOWER_Z1 + 0.6, top, top + 1)
-	local ridge, half = 7, HALF_X + 1.5
-	local tilt = math.atan2(ridge, half)
-	local len = HOUSE_Z1 - HOUSE_Z0 + 2.4
-	for _, side in ipairs({ -1, 1 }) do
-		part({ Name = "Roof", Size = Vector3.new(math.sqrt(half * half + ridge * ridge) + 0.4, 0.8, len), CFrame = L(side * half / 2, top + 1 + ridge / 2, (HOUSE_Z0 + HOUSE_Z1) / 2) * CFrame.Angles(0, 0, -side * tilt), Style = roof, Parent = lv })
-	end
-	-- gable ends, drawn as a stack of shrinking boards
-	local bars = 7
-	for _, z in ipairs({ HOUSE_Z0 - 0.3, HOUSE_Z1 + 0.3 }) do
-		for k = 0, bars - 1 do
-			local w = 2 * (half - 1) * (1 - (k + 0.5) / bars)
-			part({ Name = "Gable", Size = Vector3.new(w, ridge / bars, 0.6), CFrame = L(0, top + 1 + (k + 0.5) * ridge / bars, z), Style = ext, Parent = lv })
+		-- rooms: floor, contents, doorway
+		for key, info in pairs(infos) do
+			local r = info.rect
+			local m = Instance.new("Model")
+			m.Name = key
+			m.Parent = lv
+			slabRect(m, { x = r.x, z = r.z, w = r.w, d = r.d }, y, y + 0.2, "Floor", House.style(data, key, "floor"))
+			tagRoom(m, plot, info)
+			CollectionService:AddTag(m, "HouseRoom")
+			furnish(m, info, data)
+			for _, sp in ipairs(m:GetDescendants()) do
+				if sp:GetAttribute("UseTags") then
+					sp:SetAttribute("PlotIndex", plot.index)
+					sp:SetAttribute("Floor", info.floor)
+					sp:SetAttribute("Key", key)
+					CollectionService:AddTag(sp, "UseSpot")
+				end
+			end
+			doorway(m, info, owner)
+		end
+
+		-- flat roofs over whatever the next floor doesn't cover
+		local open = {}
+		for i in pairs(prints[f]) do
+			if not prints[f + 1][i] then
+				open[i] = true
+			end
+		end
+		local top = y + WALL_H
+		for _, r in ipairs(rects(open)) do
+			slabRect(levels[f + 1], r, top, top + 1)
+			if f < floors - 1 or not gable then
+				slabRect(levels[f + 1], r, top + 1, top + 1.2, "Roof", roofStyle)
+			end
 		end
 	end
-	-- eave boards and a chimney
-	for _, sd in ipairs({ -1, 1 }) do
-		part({ Name = "Fascia", Size = Vector3.new(0.4, 0.8, len + 0.2), CFrame = L(sd * (half + 0.15), top + 0.85, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = TRIM, Parent = lv })
+
+	-- gable roof on a rectangular top floor
+	local lvTop = levels[floors]
+	local top = floorY(floors) - 1
+	if gable then
+		local x0, x1, z0, z1 = sx(bx0), sx(bx1 + 1), sz(bz0), sz(bz1 + 1)
+		local alongZ = (z1 - z0) >= (x1 - x0)
+		local across = alongZ and (x1 - x0) or (z1 - z0)
+		local ridgeLen = alongZ and (z1 - z0) or (x1 - x0)
+		local G = plot.cf * CFrame.new((x0 + x1) / 2, 0, (z0 + z1) / 2) * (alongZ and CFrame.identity or CFrame.Angles(0, math.pi / 2, 0))
+		local ridge = math.clamp(across * 0.18, 4, 9)
+		local half = across / 2 + 1.5
+		local tilt = math.atan2(ridge, half)
+		local len = ridgeLen + 2.4
+		for _, sd in ipairs({ -1, 1 }) do
+			part({ Name = "Roof", Size = Vector3.new(math.sqrt(half * half + ridge * ridge) + 0.4, 0.8, len), CFrame = G * CFrame.new(sd * half / 2, top + 1 + ridge / 2, 0) * CFrame.Angles(0, 0, -sd * tilt), Style = roofStyle, Parent = lvTop })
+			part({ Name = "Fascia", Size = Vector3.new(0.4, 0.8, len + 0.2), CFrame = G * CFrame.new(sd * (half + 0.15), top + 0.85, 0), Color = TRIM, Parent = lvTop })
+		end
+		-- gable ends, drawn as a stack of shrinking boards
+		local bars = 7
+		for _, zz in ipairs({ -ridgeLen / 2 - 0.3, ridgeLen / 2 + 0.3 }) do
+			for k = 0, bars - 1 do
+				local w = 2 * (half - 1) * (1 - (k + 0.5) / bars)
+				part({ Name = "Gable", Size = Vector3.new(w, ridge / bars, 0.6), CFrame = G * CFrame.new(0, top + 1 + (k + 0.5) * ridge / bars, zz), Style = ext, Parent = lvTop })
+			end
+		end
+		part({ Name = "Ridge", Size = Vector3.new(1, 0.6, len + 0.2), CFrame = G * CFrame.new(0, top + 1 + ridge + 0.2, 0), Color = roofStyle.color:Lerp(Color3.new(0, 0, 0), 0.25), Material = mat(roofStyle.material), Parent = lvTop })
+		-- chimney: from under the slope to above the ridge
+		local chimX, chimZ = half * 0.45, ridgeLen * 0.25
+		local c0, c1 = top + 1 + ridge * 0.55 - 1, top + 1 + ridge + 2
+		part({ Name = "Chimney", Size = Vector3.new(3, c1 - c0, 3), CFrame = G * CFrame.new(chimX, (c0 + c1) / 2, chimZ), Color = Color3.fromRGB(150, 70, 55), Material = Enum.Material.Brick, Parent = lvTop })
+		part({ Name = "ChimneyCap", Size = Vector3.new(3.6, 0.5, 3.6), CFrame = G * CFrame.new(chimX, top + 1 + ridge + 2.25, chimZ), Color = Color3.fromRGB(80, 80, 85), Material = Enum.Material.Concrete, Parent = lvTop })
 	end
-	part({ Name = "Ridge", Size = Vector3.new(1, 0.6, len + 0.2), CFrame = L(0, top + 1 + ridge + 0.2, (HOUSE_Z0 + HOUSE_Z1) / 2), Color = roof.color:Lerp(Color3.new(0, 0, 0), 0.25), Material = mat(roof.material), Parent = lv })
-	part({ Name = "Chimney", Size = Vector3.new(3, ridge + 3, 3), CFrame = L(13, top + 1 + (ridge + 3) / 2, 22), Color = Color3.fromRGB(150, 70, 55), Material = Enum.Material.Brick, Parent = lv })
-	part({ Name = "ChimneyCap", Size = Vector3.new(3.6, 0.5, 3.6), CFrame = L(13, top + 1 + ridge + 3.25, 22), Color = Color3.fromRGB(80, 80, 85), Material = Enum.Material.Concrete, Parent = lv })
-	local roofSign = part({ Name = "RoofSign", Size = Vector3.new(22, 3, 0.4), CFrame = L(0, top + 3, HOUSE_Z0 - 0.9), Color = Color3.fromRGB(40, 40, 60), Parent = lv })
-	label(surface(roofSign, Enum.NormalId.Front, Vector2.new(880, 120)), plot.owner.DisplayName .. "'s Boarding House", Color3.fromRGB(255, 220, 90))
+	-- sign over the front of the top floor
+	if topCount > 0 then
+		local front, xs = math.huge, {}
+		for i in pairs(topPrint) do
+			local _, z = tileXZ(i)
+			front = math.min(front, z)
+		end
+		for i in pairs(topPrint) do
+			local x, z = tileXZ(i)
+			if z == front then
+				table.insert(xs, x)
+			end
+		end
+		local mn, mx = math.huge, -math.huge
+		for _, x in ipairs(xs) do
+			mn, mx = math.min(mn, x), math.max(mx, x)
+		end
+		local width = math.min(22, (mx - mn + 1) * T - 1)
+		local roofSign = part({ Name = "RoofSign", Size = Vector3.new(width, 3, 0.4), CFrame = L((sx(mn) + sx(mx + 1)) / 2, top + 3.2, sz(front) - 0.9), Color = Color3.fromRGB(40, 40, 60), Parent = lvTop })
+		label(surface(roofSign, Enum.NormalId.Front, Vector2.new(880, 120)), plot.owner.DisplayName .. "'s Boarding House", Color3.fromRGB(255, 220, 90))
+	end
+
+	-- front porch: steps, a little roof on posts, two lanterns
+	if ent then
+		local g = levels[0]
+		local ex, ez = (sx(ent.x0) + sx(ent.x1 + 1)) / 2, sz(ent.z)
+		local stone = { Color = Color3.fromRGB(150, 145, 140), Material = Enum.Material.Cobblestone }
+		local function block(name, size, x, yy, z, props)
+			local p = table.clone(props)
+			p.Name, p.Size, p.CFrame, p.Parent = name, size, L(ex + x, yy, z), g
+			return part(p)
+		end
+		local trimP = { Color = TRIM }
+		block("Step", Vector3.new(9, 0.3, 4), 0, GROUND_Y + 0.15, ez - 2.6, stone)
+		block("Step", Vector3.new(8, 0.3, 2), 0, GROUND_Y + 0.45, ez - 1.6, stone)
+		block("PorchRoof", Vector3.new(10, 0.5, 4.6), 0, floorY(0) + DOOR_H + 1.2, ez - 2.6, { Color = Color3.fromRGB(90, 60, 45), Material = Enum.Material.WoodPlanks })
+		block("PorchTrim", Vector3.new(10.4, 0.3, 0.3), 0, floorY(0) + DOOR_H + 0.85, ez - 4.8, trimP)
+		for _, sd in ipairs({ -1, 1 }) do
+			block("PorchPost", Vector3.new(0.5, DOOR_H + 1.4, 0.5), sd * 4.5, floorY(0) + (DOOR_H + 1.4) / 2, ez - 4.5, trimP)
+			block("DoorJamb", Vector3.new(0.6, DOOR_H + 0.9, 0.9), sd * 3.3, floorY(0) + (DOOR_H + 0.9) / 2 - 0.6, ez - 0.3, trimP)
+			local lantern = block("Lantern", Vector3.new(0.6, 0.9, 0.6), sd * 4.3, floorY(0) + 6, ez - 0.9, { Color = Color3.fromRGB(255, 220, 150), Material = Enum.Material.Neon })
+			block("LanternCap", Vector3.new(0.8, 0.2, 0.8), sd * 4.3, floorY(0) + 6.55, ez - 0.9, { Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal })
+			local l = Instance.new("PointLight")
+			l.Range = 14
+			l.Brightness = 0.55
+			l.Color = Color3.fromRGB(255, 210, 150)
+			l.Parent = lantern
+		end
+		block("DoorHeader", Vector3.new(7.2, 0.6, 0.9), 0, floorY(0) + DOOR_H + 0.3, ez - 0.3, trimP)
+		block("Doormat", Vector3.new(4, 0.08, 2.4), 0, GROUND_Y + 0.64, ez - 1.6, { Color = Color3.fromRGB(150, 110, 70), Material = Enum.Material.Fabric, CanCollide = false })
+	end
 end
 
 ---------------------------------------------------------------------------
@@ -1582,12 +1912,6 @@ local function setStudentAttrs(m, plot, info, sat)
 	m:SetAttribute("Floor", info.floor)
 	m:SetAttribute("Level", info.floor)
 	m:SetAttribute("HomeKey", info.key)
-	m:SetAttribute("Center", info.center)
-	m:SetAttribute("U", info.u)
-	m:SetAttribute("V", info.v)
-	m:SetAttribute("Range", info.range)
-	m:SetAttribute("Door", info.door)
-	m:SetAttribute("Hall", info.hall)
 	m:SetAttribute("Sat", sat)
 end
 
@@ -1641,34 +1965,44 @@ local function layoutBoard(sg, data)
 	box(sg, 0, 0, 900, 80, nil, "🏗 FLOOR PLANS")
 	local floors = House.floorCount(data)
 	local showLocked = floors < Config.MaxFloors
-	local n = math.max(3, floors + (showLocked and 1 or 0))
+	local n = math.max(2, floors + (showLocked and 1 or 0))
 	local colW = 880 / n
-	local grid = House.grid(data)
-	local cellW = math.min(70, (colW - 30) / 2)
-	local cellH = 88
+	local tile = math.floor(math.min((colW - 16) / House.W, 540 / House.D))
 	for f = 0, floors - (showLocked and 0 or 1) do
 		local x0 = 10 + f * colW
 		if f >= floors then
-			box(sg, x0 + 6, 120, colW - 12, 560, Color3.fromRGB(200, 195, 185), string.format("🔒 Floor %d\n$%s", f + 1, SchoolMath.format(Config.FloorCost(f + 1))), Color3.fromRGB(90, 80, 80))
+			box(sg, x0 + 6, 120, colW - 12, 540, Color3.fromRGB(200, 195, 185), string.format("🔒 Floor %d\n$%s", f + 1, SchoolMath.format(Config.FloorCost(f + 1))), Color3.fromRGB(90, 80, 80))
 		else
-			box(sg, x0, 84, colW, 32, nil, "Floor " .. (f + 1))
-			for _, side in ipairs({ -1, 1 }) do
-				local cx = side == -1 and (x0 + colW / 2 - 8 - cellW) or (x0 + colW / 2 + 8)
-				for row = 0, ROWS - 1 do
-					local p = grid[f][side][row]
-					local y = 120 + (ROWS - 1 - row) * (cellH + 6) -- front door at the bottom
-					if not p then
-						box(sg, cx, y, cellW, cellH, Color3.fromRGB(235, 230, 220), "＋", Color3.fromRGB(150, 140, 130))
-					elseif p.row == row then
-						local h = cellH * p.size + 6 * (p.size - 1)
-						box(sg, cx, y - (p.size - 1) * (cellH + 6), cellW, h, CELL_COLORS[p.kind], PlotService.CellText(p))
-					end
+			box(sg, x0, 84, colW, 32, nil, "Floor " .. (f + 1) .. (House.supported(data, f) and " 🏛" or ""))
+			local gx = x0 + (colW - tile * House.W) / 2
+			local gy = 120
+			box(sg, gx, gy, tile * House.W, tile * House.D, Color3.fromRGB(235, 230, 220))
+			local function at(x, z, w, d)
+				-- front of the house (z = 0) at the bottom
+				return gx + x * tile, gy + (House.D - z - d) * tile, w * tile, d * tile
+			end
+			local owner, stair = House.owners(data, f)
+			local hall = {}
+			for i, o in pairs(owner) do
+				if o == "hall" and not stair[i] then
+					hall[i] = true
 				end
 			end
-			box(sg, x0 + colW / 2 - 6, 120, 12, ROWS * (cellH + 6) - 6, Color3.fromRGB(215, 200, 170))
+			for _, set in ipairs({ { hall, Color3.fromRGB(215, 200, 170) }, { stair, Color3.fromRGB(160, 120, 80) } }) do
+				for _, r in ipairs(rects(set[1])) do
+					local px, py, pw, ph = at(r.x, r.z, r.w, r.d)
+					box(sg, px, py, pw, ph, set[2])
+				end
+			end
+			for _, p in ipairs(House.placements(data)) do
+				if p.floor == f then
+					local px, py, pw, ph = at(p.x, p.z, p.w, p.d)
+					box(sg, px + 1, py + 1, pw - 2, ph - 2, CELL_COLORS[p.kind], PlotService.CellText(p))
+				end
+			end
 		end
 	end
-	box(sg, 0, 690, 900, 30, nil, "🚪 front door at the bottom  •  ＋ = empty cell", Color3.fromRGB(110, 100, 100))
+	box(sg, 0, 680, 900, 34, nil, "🚪 front door at the bottom  •  🏛 = supported floor", Color3.fromRGB(110, 100, 100))
 end
 
 local function studentsBoard(sg, data)
@@ -1739,8 +2073,8 @@ local BOARDS = {
 local function buildBoards(plot, parent, info, data, totals)
 	local rcf = info.rcf
 	for _, b in ipairs(BOARDS) do
-		part({ Name = "BoardFrame", Size = Vector3.new(0.2, BOARD_H + 0.5, BOARD_W + 0.5), CFrame = rcf * CFrame.new(ROOM_U - 0.5, 6.4, b.v), Color = WOOD, Material = Enum.Material.Wood, Parent = parent })
-		local board = part({ Name = "Board", Size = Vector3.new(0.2, BOARD_H, BOARD_W), CFrame = rcf * CFrame.new(ROOM_U - 0.65, 6.4, b.v), Color = Color3.fromRGB(250, 246, 235), Parent = parent })
+		part({ Name = "BoardFrame", Size = Vector3.new(0.2, BOARD_H + 0.5, BOARD_W + 0.5), CFrame = rcf * CFrame.new(info.U - 0.5, 6.4, b.v), Color = WOOD, Material = Enum.Material.Wood, Parent = parent })
+		local board = part({ Name = "Board", Size = Vector3.new(0.2, BOARD_H, BOARD_W), CFrame = rcf * CFrame.new(info.U - 0.65, 6.4, b.v), Color = Color3.fromRGB(250, 246, 235), Parent = parent })
 		board:SetAttribute("Board", b.id)
 		board:SetAttribute("OwnerUserId", plot.owner.UserId)
 		b.draw(surface(board, Enum.NormalId.Left, CANVAS), data, totals)
@@ -1754,7 +2088,7 @@ local function buildBoards(plot, parent, info, data, totals)
 		CollectionService:AddTag(pp, "BoardPrompt")
 		-- pins in the top corners, clear of the title
 		for _, dv in ipairs({ -1, 1 }) do
-			part({ Name = "Pin", Shape = Enum.PartType.Ball, Size = Vector3.new(0.35, 0.35, 0.35), CFrame = rcf * CFrame.new(ROOM_U - 0.8, 6.4 + BOARD_H / 2 - 0.25, b.v + dv * (BOARD_W / 2 - 0.25)), Color = Color3.fromRGB(220, 40, 40), CanCollide = false, Parent = parent })
+			part({ Name = "Pin", Shape = Enum.PartType.Ball, Size = Vector3.new(0.35, 0.35, 0.35), CFrame = rcf * CFrame.new(info.U - 0.8, 6.4 + BOARD_H / 2 - 0.25, b.v + dv * (BOARD_W / 2 - 0.25)), Color = Color3.fromRGB(220, 40, 40), CanCollide = false, Parent = parent })
 		end
 	end
 end
@@ -1896,7 +2230,7 @@ local function renderPhotos(plot, data, folder)
 			for _, ph in ipairs(list) do
 				table.insert(ids, ph.id)
 			end
-			local sig = info.key .. "@" .. tostring(info.rcf.Position) .. ":" .. table.concat(ids, ",")
+			local sig = info.key .. "@" .. tostring(info.dcf.Position) .. ":" .. table.concat(ids, ",")
 			local name = "r" .. i
 			local wall = folder:FindFirstChild(name)
 			if wall and wall:GetAttribute("Sig") ~= sig then
@@ -1910,7 +2244,7 @@ local function renderPhotos(plot, data, folder)
 				wall:SetAttribute("Level", info.floor)
 				for k, ph in ipairs(list) do
 					local slot = PHOTO_SLOTS[k]
-					photoFrame(wall, info.rcf * CFrame.new(0.5, slot.y, slot.v), ph, data)
+					photoFrame(wall, info.dcf * CFrame.new(0.5, slot.y, slot.v), ph, data)
 				end
 				wall.Parent = folder
 			end
@@ -1967,22 +2301,28 @@ local function renderLive(plot, data, totals)
 			local tier = Config.RoomTiers[room.tier]
 			local stats = totals and totals.rooms[i]
 			local lv = levels[info.floor]
-			-- beds along the outside wall, colored by who sleeps there
+			-- beds in rows from the back wall, colored by who sleeps there
 			local beds = Config.Beds(room)
-			local w = ROOM_V * info.size
+			local U, w = info.U, info.V
+			local perRow = math.max(1, math.floor((w - 1) / 4.6))
+			local rows = math.max(1, math.min(math.ceil(beds / perRow), math.floor((U - 4) / 10)))
+			perRow = math.ceil(beds / rows)
 			for b = 1, beds do
-				local v = -w / 2 + (w / beds) * (b - 0.5)
+				local row = (b - 1) // perRow
+				local inRow = math.min(perRow, beds - row * perRow)
+				local col = (b - 1) % perRow
+				local v = -w / 2 + (w / inRow) * (col + 0.5)
 				local occ = room.occupants[b]
 				local color = Color3.fromRGB(120, 160, 230)
 				if occ and data.students[occ] then
 					local occDef = Config.StudentById[data.students[occ].id]
 					color = occDef.shirt or Config.Looks[occDef.look].color
 				end
-				bed(lv, rcf * CFrame.new(ROOM_U - 4.2, 0.2, v) * BED_TURN, color)
-				-- nightstand + lamp between beds when there's space
-				if b < beds and w / beds >= 5.4 then
-					local nv = v + w / beds / 2
-					local ns = rcf * CFrame.new(ROOM_U - 1.4, 0, nv)
+				bed(lv, rcf * CFrame.new(U - 4.2 - row * 10, 0.2, v) * BED_TURN, color)
+				-- nightstand + lamp between beds against the back wall when there's space
+				if row == 0 and col < inRow - 1 and w / inRow >= 5.4 then
+					local nv = v + w / inRow / 2
+					local ns = rcf * CFrame.new(U - 1.4, 0, nv)
 					part({ Name = "Nightstand", Size = Vector3.new(1.4, 1.8, 1.3), CFrame = ns * CFrame.new(0, 1.1, 0), Color = BED_WOOD, Material = Enum.Material.Wood, Parent = lv })
 					part({ Name = "Drawer", Size = Vector3.new(0.05, 0.5, 1), CFrame = ns * CFrame.new(-0.72, 1.4, 0), Color = BED_WOOD:Lerp(Color3.new(0, 0, 0), 0.25), CanCollide = false, Parent = lv })
 					part({ Name = "LampBase", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.8, 0.25, 0.25), CFrame = ns * CFrame.new(0, 2.4, 0) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(60, 60, 65), CanCollide = false, Parent = lv })
@@ -1991,7 +2331,7 @@ local function renderLive(plot, data, totals)
 			end
 
 			-- door plate + prompt in the hallway
-			local plate = part({ Name = "Plate", Size = Vector3.new(0.1, 1.8, 6), CFrame = rcf * CFrame.new(-0.45, DOOR_H + 1.3, 0), Color = Color3.fromRGB(40, 40, 60), Parent = lv })
+			local plate = part({ Name = "Plate", Size = Vector3.new(0.1, 1.8, 6), CFrame = info.dcf * CFrame.new(-0.45, DOOR_H + 1.3, 0), Color = Color3.fromRGB(40, 40, 60), Parent = lv })
 			plate:SetAttribute("OwnerUserId", owner.UserId)
 			plate:SetAttribute("RoomIndex", i)
 			local cd = Instance.new("ClickDetector")
@@ -2002,7 +2342,7 @@ local function renderLive(plot, data, totals)
 			local sat = stats and stats.satisfaction or 0
 			label(sg, string.format("🛏 Room %d • %s", i, tier.name), Color3.fromRGB(255, 230, 120), UDim2.fromScale(1, 0.5))
 			label(sg, #room.occupants == 0 and "empty" or string.format("%s %d%%  •  $%s/s", SchoolMath.moodEmoji(sat), math.floor(sat), SchoolMath.format(stats and stats.income or 0)), Color3.new(1, 1, 1), UDim2.fromScale(1, 0.5), UDim2.fromScale(0, 0.5))
-			local spot = part({ Name = "DoorSpot", Size = Vector3.new(1, 1, 1), CFrame = rcf * CFrame.new(-1.5, 3, 0), Transparency = 1, CanCollide = false, CanQuery = false, Parent = lv })
+			local spot = part({ Name = "DoorSpot", Size = Vector3.new(1, 1, 1), CFrame = info.dcf * CFrame.new(-1.5, 3, 0), Transparency = 1, CanCollide = false, CanQuery = false, Parent = lv })
 			local pp = prompt(spot, "Manage room", "Room " .. i, 7)
 			pp:SetAttribute("OwnerUserId", owner.UserId)
 			pp:SetAttribute("RoomIndex", i)
@@ -2014,17 +2354,20 @@ local function renderLive(plot, data, totals)
 					local st = stats and stats.students[uid]
 					local satv = st and st.sat or 50
 					local m = students:FindFirstChild(uid)
-					if m and (m:GetAttribute("HomeKey") ~= info.key or m:GetAttribute("StudentId") ~= s.id or m:GetAttribute("Origin") ~= plot.cf) then
+					local r = info.rect
+					local where = string.format("%d,%d,%d,%d,%d/%d,%d", r.floor, r.x, r.z, r.w, r.d, r.door.x, r.door.z)
+					if m and (m:GetAttribute("HomeKey") ~= info.key or m:GetAttribute("StudentId") ~= s.id or m:GetAttribute("Origin") ~= plot.cf or m:GetAttribute("HomeRect") ~= where) then
 						m:Destroy()
 						m = nil
 					end
 					if not m then
 						local rng = Random.new()
-						local start = rcf * CFrame.new(rng:NextNumber(3, ROOM_U - 8), 0.2, rng:NextNumber(-w / 2 + 2, w / 2 - 2))
+						local start = rcf * CFrame.new(rng:NextNumber(2.5, math.max(3, U - 8)), 0.2, rng:NextNumber(-w / 2 + 2, w / 2 - 2))
 						m = PlotService.BuildStudentModel(uid, s, start)
 						m.Name = uid
 						m:SetAttribute("StudentId", s.id)
 						m:SetAttribute("Origin", plot.cf)
+						m:SetAttribute("HomeRect", where)
 						setStudentAttrs(m, plot, info, satv)
 						m.Parent = students
 					else
@@ -2048,7 +2391,7 @@ local function renderLive(plot, data, totals)
 		local kind, _, fid = House.describe(key)
 		if kind ~= "dorm" then
 			local text = kind == "me" and ("⭐ " .. owner.DisplayName .. "'s Room") or kind == "common" and "🛋 Common Room" or (Config.FacilityById[fid].emoji .. " " .. Config.FacilityById[fid].name)
-			local plate = part({ Name = "Plate", Size = Vector3.new(0.1, 1.4, 6), CFrame = info.rcf * CFrame.new(-0.45, DOOR_H + 1.3, 0), Color = Color3.fromRGB(250, 245, 230), Parent = levels[info.floor] })
+			local plate = part({ Name = "Plate", Size = Vector3.new(0.1, 1.4, 6), CFrame = info.dcf * CFrame.new(-0.45, DOOR_H + 1.3, 0), Color = Color3.fromRGB(250, 245, 230), Parent = levels[info.floor] })
 			label(surface(plate, Enum.NormalId.Left, Vector2.new(600, 140)), text, Color3.fromRGB(60, 40, 30)).TextStrokeTransparency = 1
 		end
 	end
@@ -2099,7 +2442,7 @@ function PlotService.MyRoomCFrame(plot)
 	if not info then
 		return PlotService.SpawnCFrame(plot)
 	end
-	local pos = (info.rcf * CFrame.new(7, 3, 0)).Position
+	local pos = (info.rcf * CFrame.new(math.min(7, info.U - 4), 3, 0)).Position
 	return CFrame.lookAt(pos, pos + info.u)
 end
 

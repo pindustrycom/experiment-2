@@ -207,7 +207,7 @@ local panel = UI.new("Frame", {
 })
 UI.corner(panel, 18)
 UI.stroke(panel, Color3.new(0, 0, 0), 3)
-UI.new("UISizeConstraint", { MaxSize = Vector2.new(820, 620), MinSize = Vector2.new(340, 300), Parent = panel })
+local panelSize = UI.new("UISizeConstraint", { MaxSize = Vector2.new(820, 620), MinSize = Vector2.new(340, 300), Parent = panel })
 local panelTitle = UI.text(panel, "", 28, C.gold, {
 	Size = UDim2.new(1, -70, 0, 44),
 	Position = UDim2.fromOffset(18, 8),
@@ -747,7 +747,9 @@ function Render.students()
 	end
 end
 
--- Floor plans board: pick a cell on a floor, then build / upgrade / expand
+-- Floor plans board: a full-screen designer. Paint hallways, draw rooms,
+-- move and resize them, pick doors, place stairs, add supports and floors.
+-- Every change is checked here first (House.validate) and again on the server.
 local GRAY = Color3.fromRGB(110, 110, 120)
 local CELL_COLORS = {
 	me = Color3.fromRGB(200, 160, 60),
@@ -755,6 +757,17 @@ local CELL_COLORS = {
 	dorm = Color3.fromRGB(70, 120, 200),
 	facility = Color3.fromRGB(190, 90, 140),
 }
+local TILE_COLORS = {
+	ground = Color3.fromRGB(70, 66, 100), -- you can build here
+	reach = Color3.fromRGB(52, 50, 80), -- only with supports on the floor below
+	none = Color3.fromRGB(32, 30, 50), -- nothing underneath
+	hall = Color3.fromRGB(215, 200, 170),
+	stairs = Color3.fromRGB(160, 120, 80),
+	well = Color3.fromRGB(120, 90, 60),
+	add = Color3.fromRGB(250, 225, 120),
+	remove = Color3.fromRGB(210, 90, 90),
+}
+local DIR_ARROWS = { "▲", "▶", "▼", "◀" } -- front of the house at the bottom of the map
 
 local function cellLabel(p)
 	if p.kind == "me" then
@@ -775,146 +788,479 @@ local function actionButton(parent, text, cost, order, onClick)
 	return UI.button(parent, label, afford and C.green or GRAY, onClick, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = order, TextWrapped = true })
 end
 
+local function rectOf(a, b)
+	local x0, x1 = math.min(a[1], b[1]), math.max(a[1], b[1])
+	local z0, z1 = math.min(a[2], b[2]), math.max(a[2], b[2])
+	return x0, z0, x1 - x0 + 1, z1 - z0 + 1
+end
+
+-- what the room tool would cost
+local function roomCost(d, key, kind, id, w, h)
+	if key then
+		local k, index = House.describe(key)
+		if k == "dorm" then
+			return math.max(0, w * h - House.area(d, key)) * Config.ExtraTileCost(index)
+		end
+		return 0
+	elseif kind == "dorm" then
+		local index = #d.rooms + 1
+		return Config.RoomUnlockCost(index) + math.max(0, w * h - 9) * Config.ExtraTileCost(index)
+	end
+	local f = Config.FacilityById[id]
+	return f and f.cost or 0
+end
+
 function Render.layout()
 	local d = State.data
 	local floors = House.floorCount(d)
 	local floor = math.clamp(panelState.floor or 0, 0, floors - 1)
 	panelState.floor = floor
+	local ds = panelState.design or { tool = "select" }
+	panelState.design = ds
 	panelTitle.Text = "🏗 Floor Plans"
-	resetLayout("list")
+
+	local function redraw()
+		openPanel("layout")
+	end
+	local function setTool(tool, extra)
+		panelState.design = { tool = tool }
+		for k, v in pairs(extra or {}) do
+			panelState.design[k] = v
+		end
+		redraw()
+	end
+
+	-- floor tabs + buy floor
 	for f = 0, floors - 1 do
-		UI.button(toolbar, "Floor " .. (f + 1), f == floor and C.purple or C.card, function()
+		UI.button(toolbar, "Floor " .. (f + 1) .. (House.supported(d, f) and " 🏛" or ""), f == floor and C.purple or C.card, function()
 			panelState.floor = f
-			panelState.cell = nil
-			openPanel("layout")
-		end, { Size = UDim2.fromOffset(90, 40), TextSize = 16 })
+			if ds.tool ~= "select" and ds.tool ~= "hall" then
+				panelState.design = { tool = "select", key = ds.key }
+			end
+			panelState.design.pending = nil
+			redraw()
+		end, { Size = UDim2.fromOffset(100, 40), TextSize = 16 })
 	end
 	if floors < Config.MaxFloors then
 		local cost = Config.FloorCost(floors + 1)
 		UI.button(toolbar, "🏗 Floor " .. (floors + 1) .. " $" .. fmt(cost), d.cash >= cost and C.green or GRAY, function()
 			if result(call("buyFloor"), "🏗 Floor " .. (floors + 1) .. " is ready! Go up the stairs.") then
 				panelState.floor = floors
-				panelState.cell = nil
 			end
-		end, { Size = UDim2.fromOffset(170, 40), TextSize = 15 })
+		end, { Size = UDim2.fromOffset(180, 40), TextSize = 15 })
 	end
 
-	local body = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 430), LayoutOrder = 1, Parent = scroll })
-	-- the map: front door at the bottom, like looking down from above
-	local map = UI.card(body, { Size = UDim2.fromOffset(290, 430), BackgroundColor3 = C.bg })
-	local grid = House.grid(d)
-	local CW, CH, GAP = 115, 58, 6
-	UI.new("Frame", { BackgroundColor3 = Color3.fromRGB(90, 80, 70), Position = UDim2.fromOffset(135, 8), Size = UDim2.fromOffset(20, House.Rows * (CH + GAP) - GAP), Parent = map })
-	UI.text(map, "🚪 front door", 14, C.sub, { Position = UDim2.fromOffset(0, 400), Size = UDim2.new(1, 0, 0, 22), TextXAlignment = Enum.TextXAlignment.Center })
-	local sel = panelState.cell
-	for _, side in ipairs({ -1, 1 }) do
-		local x = side == -1 and 14 or 161
-		for row = 0, House.Rows - 1 do
-			local p = grid[floor][side][row]
-			local y = 8 + (House.Rows - 1 - row) * (CH + GAP)
-			if not p or p.row == row then
-				local size = p and p.size or 1
-				local h = CH * size + GAP * (size - 1)
-				local selected = sel and sel.floor == floor and sel.side == side and (sel.row == row)
-				local b = UI.button(map, p and cellLabel(p) or "＋", p and CELL_COLORS[p.kind] or Color3.fromRGB(70, 66, 100), function()
-					panelState.cell = { floor = floor, side = side, row = row }
-					openPanel("layout")
-				end, { Position = UDim2.fromOffset(x, y - (size - 1) * (CH + GAP)), Size = UDim2.fromOffset(CW, h), TextSize = 14, TextWrapped = true })
-				local stroke = b:FindFirstChildOfClass("UIStroke")
-				stroke.Color = selected and C.gold or Color3.new(0, 0, 0)
-				stroke.Thickness = selected and 4 or 2
-				stroke.Transparency = 0
-			end
+	-- the designer fills the panel body (not the scroll list)
+	local body = UI.new("Frame", { Name = "Designer", BackgroundTransparency = 1, Position = scroll.Position, Size = scroll.Size, Parent = panel })
+	local bodySize = body.AbsoluteSize
+	if bodySize.X < 10 then
+		bodySize = Vector2.new(900, 520)
+	end
+	local SIDE = math.clamp(bodySize.X * 0.34, 230, 340)
+	local ts = math.max(10, math.floor(math.min((bodySize.X - SIDE - 16) / House.W, bodySize.Y / House.D)))
+	local mapW, mapH = ts * House.W, ts * House.D
+	local map = UI.new("Frame", { BackgroundColor3 = C.bg, BorderSizePixel = 0, Size = UDim2.fromOffset(mapW, mapH), Parent = body })
+	local function at(x, z, w, h)
+		return UDim2.fromOffset(x * ts, (House.D - z - (h or 1)) * ts), UDim2.fromOffset((w or 1) * ts, (h or 1) * ts)
+	end
+
+	local owner, stair, well = House.owners(d, floor)
+	local below = floor > 0 and House.footprint(d, floor - 1) or nil
+	local reach = floor > 0 and House.supported(d, floor - 1) and House.Overhang or 0
+	local function underneath(x, z)
+		if not below then
+			return "ground"
 		end
-	end
-
-	-- what you can do with the selected cell
-	local pane = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(304, 0), Size = UDim2.new(1, -304, 1, 0), Parent = body })
-	local actions = UI.new("ScrollingFrame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 6, BorderSizePixel = 0, Parent = pane })
-	UI.list(actions, 6)
-	if not sel or sel.floor ~= floor then
-		UI.text(actions, string.format("Tap a cell on the map.\n\n<b>%d</b> of %d dorm rooms built • <b>%d</b> empty cells in the house.\n\nBig rooms take two cells: +%d beds and +%d 🎀 decor.", #d.rooms, Config.MaxRooms, House.freeCells(d), Config.BigRoomBeds, Config.BigRoomDecor), 16, C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
-		-- house rules: who can apply (rooms are always boys or girls)
-		UI.text(actions, "<b>📜 House rules</b>  who applies to your house. Each room is boys or girls, set by its first student.", 15, C.text, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
-		for _, key in ipairs({ "Mixed", "Boys", "Girls" }) do
-			local on = d.houseGender == key
-			UI.button(actions, (on and "✓ " or "") .. Config.HouseGenders[key], on and C.purple or C.card, function()
-				if not on then
-					result(call("houseGender", { value = key }), "📜 House rule: " .. Config.HouseGenders[key])
+		if below[House.id(x, z)] then
+			return "ground"
+		end
+		for dx = -reach, reach do
+			for dz = -reach, reach do
+				if House.inLot(x + dx, z + dz) and below[House.id(x + dx, z + dz)] then
+					return "reach"
 				end
-			end, { Size = UDim2.new(1, 0, 0, 36), TextSize = 15 })
+			end
 		end
-		return
+		return "none"
 	end
-	local p = grid[sel.floor][sel.side][sel.row]
+
+	-- the pending change, applied to a copy of the plan
+	local preview, previewOk, previewErr, previewCost = nil, false, nil, 0
+	ds.rect = nil
+	local pend = ds.pending
+	if ds.tool == "hall" and pend and next(pend) then
+		preview = House.clonePlan(d)
+		previewCost = 0
+		for i, on in pairs(pend) do
+			local x, z = (i - 1) % House.W, (i - 1) // House.W
+			if on and not House.isHall(d, floor, x, z) then
+				previewCost += Config.HallTileCost
+			end
+			House.setHall(preview, floor, x, z, on)
+		end
+	elseif (ds.tool == "room" or ds.tool == "move" or ds.tool == "resize") and ds.a and ds.b then
+		local x, z, w, h = rectOf(ds.a, ds.b)
+		ds.rect = { x = x, z = z, w = w, d = h }
+		local key = ds.key or "new"
+		preview = House.clonePlan(d)
+		local old = preview.layout[key]
+		preview.layout[key] = { floor = floor, x = x, z = z, w = w, d = h, door = old and old.door }
+		if not ds.key and ds.kind == "dorm" then
+			preview.rooms = table.clone(d.rooms)
+			table.insert(preview.rooms, { tier = 1, area = w * h, occupants = {} })
+			preview.layout["r" .. #preview.rooms] = preview.layout.new
+			preview.layout.new = nil
+		elseif not ds.key then
+			preview.layout["fac:" .. ds.id] = preview.layout.new
+			preview.layout.new = nil
+		end
+		previewCost = roomCost(d, ds.key, ds.kind, ds.id, w, h)
+	elseif ds.tool == "stairs" and ds.a then
+		preview = House.clonePlan(d)
+		preview.plan.stairs[floor + 1] = { x = ds.a[1], z = ds.a[2], dir = ds.dir or 1 }
+	end
+	if preview then
+		previewOk, previewErr = House.validate(preview)
+	end
+	local showOwner, showStair, showWell = owner, stair, well
+	if preview and ds.tool ~= "room" and ds.tool ~= "move" and ds.tool ~= "resize" then
+		showOwner, showStair, showWell = House.owners(preview, floor)
+	end
+
+	-- tiles
+	local dragging = nil
+	local function tileClicked(x, z)
+		local i = House.id(x, z)
+		if ds.tool == "select" then
+			local o = owner[i]
+			panelState.design = { tool = "select", key = (o and o ~= "hall") and o or nil }
+			redraw()
+		elseif ds.tool == "hall" then
+			ds.pending = ds.pending or {}
+			local now = ds.pending[i]
+			if now == nil then
+				ds.pending[i] = not House.isHall(d, floor, x, z)
+			else
+				ds.pending[i] = nil
+			end
+			dragging = ds.pending[i]
+			redraw()
+		elseif ds.tool == "room" or ds.tool == "resize" then
+			if not ds.a or ds.b then
+				ds.a, ds.b = { x, z }, nil
+			else
+				ds.b = { x, z }
+			end
+			redraw()
+		elseif ds.tool == "move" then
+			local r = d.layout[ds.key]
+			local w, h = ds.w or r.w, ds.h or r.d
+			ds.a, ds.b = { x, z }, { x + w - 1, z + h - 1 }
+			redraw()
+		elseif ds.tool == "door" then
+			local r = d.layout[ds.key]
+			for _, dir in ipairs(House.DIRS) do
+				local rx, rz = x - dir[1], z - dir[2]
+				if r and r.floor == floor and rx >= r.x and rx < r.x + r.w and rz >= r.z and rz < r.z + r.d then
+					if result(call("plan", { op = "door", key = ds.key, x = rx, z = rz, dx = dir[1], dz = dir[2] }), "🚪 Door moved!") then
+						setTool("select", { key = ds.key })
+					end
+					return
+				end
+			end
+			toast("Tap a hallway tile right next to the room.", "error")
+		elseif ds.tool == "stairs" then
+			ds.a = { x, z }
+			redraw()
+		end
+	end
+	for z = 0, House.D - 1 do
+		for x = 0, House.W - 1 do
+			local i = House.id(x, z)
+			local o = showOwner[i]
+			local color, text = TILE_COLORS[underneath(x, z)], ""
+			if o == "hall" then
+				color = TILE_COLORS.hall
+				if showStair[i] then
+					color = TILE_COLORS.stairs
+					local st = House.stairs(preview or d, floor)
+					text = st and DIR_ARROWS[st.dir] or ""
+				elseif showWell[i] then
+					color, text = TILE_COLORS.well, "🪜"
+				end
+			end
+			if ds.tool == "hall" and pend and pend[i] ~= nil then
+				color = pend[i] and TILE_COLORS.add or TILE_COLORS.remove
+			end
+			local pos, size = at(x, z)
+			local b = UI.new("TextButton", { Text = text, TextSize = math.floor(ts * 0.6), Font = Enum.Font.FredokaOne, TextColor3 = Color3.new(1, 1, 1), AutoButtonColor = true, BackgroundColor3 = color, BorderColor3 = Color3.fromRGB(20, 18, 34), BorderSizePixel = 1, Position = pos, Size = size, Parent = map })
+			b.MouseButton1Down:Connect(function()
+				tileClicked(x, z)
+			end)
+			if ds.tool == "hall" then
+				b.MouseEnter:Connect(function()
+					if dragging ~= nil and ds.pending then
+						ds.pending[i] = dragging
+						b.BackgroundColor3 = dragging and TILE_COLORS.add or TILE_COLORS.remove
+					end
+				end)
+				b.MouseButton1Up:Connect(function()
+					if dragging ~= nil then
+						dragging = nil
+						redraw()
+					end
+				end)
+			end
+		end
+	end
+
+	-- rooms on top (labels let taps through to the tiles)
+	for _, p in ipairs(House.placements(d)) do
+		if p.floor == floor and not ((ds.tool == "move" or ds.tool == "resize") and ds.key == p.key and ds.rect) then
+			local pos, size = at(p.x, p.z, p.w, p.d)
+			local selected = ds.key == p.key
+			local l = UI.new("TextLabel", { Text = cellLabel(p), TextWrapped = true, TextScaled = true, Font = Enum.Font.FredokaOne, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = CELL_COLORS[p.kind], Position = pos + UDim2.fromOffset(2, 2), Size = size - UDim2.fromOffset(4, 4), Parent = map })
+			UI.corner(l, 6)
+			UI.new("UITextSizeConstraint", { MaxTextSize = 20, Parent = l })
+			UI.stroke(l, selected and C.gold or Color3.new(0, 0, 0), selected and 4 or 1)
+			-- the door: a white bar on the room's edge
+			local door = d.layout[p.key].door
+			if door then
+				local cx = (door.x + 0.5 + door.dx * 0.5) * ts
+				local cy = (House.D - door.z - 0.5 - door.dz * 0.5) * ts
+				local horizontal = door.dz ~= 0
+				UI.new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, BackgroundColor3 = Color3.new(1, 1, 1), Position = UDim2.fromOffset(cx, cy), Size = horizontal and UDim2.fromOffset(ts * 0.7, 4) or UDim2.fromOffset(4, ts * 0.7), ZIndex = 3, Parent = map })
+			end
+		end
+	end
+	if ds.rect and preview then
+		local r = ds.rect
+		local pos, size = at(r.x, r.z, r.w, r.d)
+		local box = UI.new("TextLabel", { Text = string.format("%d x %d", r.w, r.d), TextScaled = true, Font = Enum.Font.FredokaOne, TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = previewOk and C.green or C.red, BackgroundTransparency = 0.35, Position = pos, Size = size, ZIndex = 4, Parent = map })
+		UI.new("UITextSizeConstraint", { MaxTextSize = 22, Parent = box })
+	elseif (ds.tool == "room" or ds.tool == "resize") and ds.a then
+		local pos, size = at(ds.a[1], ds.a[2])
+		UI.new("Frame", { BackgroundColor3 = C.gold, BackgroundTransparency = 0.3, Position = pos, Size = size, ZIndex = 4, Parent = map })
+	end
+
+	-- right side: tools and what's selected
+	local side = UI.new("ScrollingFrame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(mapW + 14, 0), Size = UDim2.new(1, -(mapW + 14), 1, 0), CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 6, BorderSizePixel = 0, Parent = body })
+	UI.list(side, 6)
 	local order = 0
 	local function nextOrder()
 		order += 1
 		return order
 	end
-	if not p then
-		UI.text(actions, "<b>Empty cell</b>  " .. House.cellName(sel), 16, C.gold, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
+	local function note(text, color)
+		return UI.text(side, text, 15, color or C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, -8, 0, 0), LayoutOrder = nextOrder() })
+	end
+	local function btn(text, color, onClick)
+		return UI.button(side, text, color, onClick, { Size = UDim2.new(1, -8, 0, 38), TextSize = 15, LayoutOrder = nextOrder(), TextWrapped = true })
+	end
+	local tools = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -8, 0, 84), LayoutOrder = nextOrder(), Parent = side })
+	UI.new("UIGridLayout", { CellSize = UDim2.new(0.5, -4, 0, 38), CellPadding = UDim2.fromOffset(8, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = tools })
+	for k, t in ipairs({ { "select", "👆 Select" }, { "hall", "🟫 Hallway" }, { "room", "➕ New room" }, { "stairs", "🪜 Stairs" } }) do
+		local on = ds.tool == t[1] or (t[1] == "select" and (ds.tool == "move" or ds.tool == "resize" or ds.tool == "door"))
+		UI.button(tools, t[2], on and C.purple or C.card, function()
+			if t[1] == "stairs" and floor >= floors - 1 then
+				toast("Stairs go up to the next floor. Buy another floor first!", "error")
+				return
+			end
+			setTool(t[1], { key = t[1] == "select" and ds.key or nil, dir = t[1] == "stairs" and (House.stairs(d, floor) or {}).dir or nil })
+		end, { TextSize = 15, LayoutOrder = k })
+	end
+
+	local function applyRow(label, cost, onApply)
+		if previewErr then
+			note("⚠ " .. previewErr, C.red)
+		end
+		btn((previewOk and "✅ " or "🚫 ") .. label .. (cost and cost > 0 and ("  $" .. fmt(cost)) or ""), previewOk and (not cost or d.cash >= cost) and C.green or GRAY, function()
+			if previewOk then
+				onApply()
+			else
+				toast(previewErr or "That doesn't work.", "error")
+			end
+		end)
+		btn("↩ Cancel", C.card, function()
+			setTool("select", { key = ds.key })
+		end)
+	end
+
+	if ds.tool == "hall" then
+		note("<b>🟫 Hallway</b>\nTap or drag over tiles to add or remove hallway. Rooms need a hallway by their door, and the hallway on Floor 1 has to reach the front of the house.")
+		if pend and next(pend) then
+			local on, off = {}, {}
+			for i, v in pairs(pend) do
+				table.insert(v and on or off, { (i - 1) % House.W, (i - 1) // House.W })
+			end
+			applyRow("Apply", previewCost, function()
+				local ok = true
+				if #on > 0 then
+					ok = result(call("plan", { op = "hall", floor = floor, tiles = on, on = true }))
+				end
+				if ok and #off > 0 then
+					ok = result(call("plan", { op = "hall", floor = floor, tiles = off, on = false }))
+				end
+				if ok then
+					toast("🟫 Hallway updated!", "cash")
+					setTool("hall")
+				end
+			end)
+		end
+	elseif ds.tool == "room" and not ds.kind then
+		note("<b>➕ New room</b>  What do you want to build?")
 		local index = #d.rooms + 1
 		if index <= Config.MaxRooms then
-			actionButton(actions, "🛏 New dorm room (2 beds)", Config.RoomUnlockCost(index), nextOrder(), function()
-				result(call("build", { kind = "dorm", floor = sel.floor, side = sel.side, row = sel.row }), "🛏 Room " .. index .. " built!")
+			actionButton(side, "🛏 Dorm room (3 x 3 = " .. Config.RoomTiers[1].beds .. " beds)", Config.RoomUnlockCost(index), nextOrder(), function()
+				setTool("room", { kind = "dorm" })
 			end)
-			local bigRow = House.isFree(d, sel.floor, sel.side, sel.row, 2) and sel.row or (House.isFree(d, sel.floor, sel.side, sel.row - 1, 2) and sel.row - 1)
-			if bigRow then
-				actionButton(actions, string.format("🛏🛏 Big dorm room (%d beds, 2 cells)", Config.RoomTiers[1].beds + Config.BigRoomBeds), Config.RoomUnlockCost(index) + Config.ExpandCost(index), nextOrder(), function()
-					result(call("build", { kind = "dorm", big = true, floor = sel.floor, side = sel.side, row = bigRow }), "🛏 Big Room " .. index .. " built!")
-				end)
-			end
 		end
 		for _, f in ipairs(Config.Facilities) do
 			if not d.facilities[f.id] then
-				actionButton(actions, f.emoji .. " " .. f.name .. " (" .. f.text .. ")", f.cost, nextOrder(), function()
-					result(call("build", { kind = "facility", id = f.id, floor = sel.floor, side = sel.side, row = sel.row }), f.emoji .. " " .. f.name .. " built!")
+				actionButton(side, f.emoji .. " " .. f.name, f.cost, nextOrder(), function()
+					setTool("room", { kind = "facility", id = f.id })
 				end)
 			end
 		end
-	elseif p.kind == "dorm" then
-		local i = p.index
-		local room = d.rooms[i]
-		local tier = Config.RoomTiers[room.tier]
-		UI.text(actions, string.format("<b>Room %d</b> • %s%s • %d/%d beds", i, room.size == 2 and "Big " or "", tier.name, #room.occupants, Config.Beds(room)), 17, C.gold, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
-		local nt = Config.RoomTiers[room.tier + 1]
-		if nt then
-			actionButton(actions, string.format("⬆ Upgrade to %s (%d beds, +%d decor)", nt.name, nt.beds, nt.decor), Config.RoomUpgradeCost(i, room.tier + 1), nextOrder(), function()
-				result(call("upgradeRoom", { room = i }), "⬆ Room " .. i .. " is now a " .. nt.name .. "!")
+	elseif ds.tool == "room" then
+		local what = ds.kind == "dorm" and "🛏 Dorm room" or (Config.FacilityById[ds.id].emoji .. " " .. Config.FacilityById[ds.id].name)
+		note(string.format("<b>%s</b>\nTap two corners on the map. Rooms are at least 3 x 3 tiles and need a hallway next to them.%s", what, ds.kind == "dorm" and string.format(" Every %d extra tiles add a bed.", 6) or ""))
+		if ds.rect then
+			applyRow("Build here", previewCost, function()
+				local r = ds.rect
+				if result(call("plan", { op = "room", kind = ds.kind, id = ds.id, floor = floor, x = r.x, z = r.z, w = r.w, d = r.d }), what .. " built!") then
+					setTool("select")
+				end
+			end)
+		else
+			btn("↩ Cancel", C.card, function()
+				setTool("room")
 			end)
 		end
-		if room.size ~= 2 then
-			if House.expandRow(d, i) then
-				actionButton(actions, string.format("↔ Expand into the next cell (+%d beds, +%d decor)", Config.BigRoomBeds, Config.BigRoomDecor), Config.ExpandCost(i), nextOrder(), function()
-					result(call("expandRoom", { room = i }), "↔ Room " .. i .. " is bigger now!")
+	elseif ds.tool == "stairs" and floor >= floors - 1 then
+		note("<b>🪜 Stairs</b>\nStairs go up from this floor to the next one. Buy another floor first!")
+	elseif ds.tool == "stairs" then
+		note("<b>🪜 Stairs up to Floor " .. (floor + 2) .. "</b>\nStairs are 3 hallway tiles long, with hallway in front of them and hallway upstairs where they arrive. Tap where they start.")
+		btn("⟳ Turn  " .. DIR_ARROWS[ds.dir or 1], C.blue, function()
+			ds.dir = (ds.dir or 1) % 4 + 1
+			redraw()
+		end)
+		if ds.a then
+			applyRow("Put stairs here", 0, function()
+				if result(call("plan", { op = "stairs", floor = floor, x = ds.a[1], z = ds.a[2], dir = ds.dir or 1 }), "🪜 Stairs moved!") then
+					setTool("select")
+				end
+			end)
+		end
+	elseif ds.key and d.layout[ds.key] then
+		-- a selected room
+		local key = ds.key
+		local r = d.layout[key]
+		local kind, i, fid = House.describe(key)
+		if ds.tool == "move" then
+			note("<b>✥ Move</b>  Tap where its front-left corner goes.")
+			btn("⟳ Turn", C.blue, function()
+				local w, h = ds.w or r.w, ds.h or r.d
+				ds.w, ds.h = h, w
+				if ds.a then
+					ds.b = { ds.a[1] + h - 1, ds.a[2] + w - 1 }
+				end
+				redraw()
+			end)
+		elseif ds.tool == "resize" then
+			note("<b>⤡ Resize</b>  Tap two corners for its new size.")
+		elseif ds.tool == "door" then
+			note("<b>🚪 Door</b>  Tap the hallway tile it should open onto.")
+			btn("↩ Cancel", C.card, function()
+				setTool("select", { key = key })
+			end)
+		end
+		if (ds.tool == "move" or ds.tool == "resize") then
+			if ds.rect then
+				applyRow(ds.tool == "move" and "Move here" or "Resize", previewCost, function()
+					local rr = ds.rect
+					if result(call("plan", { op = "room", key = key, floor = floor, x = rr.x, z = rr.z, w = rr.w, d = rr.d }), "✅ Done!") then
+						setTool("select", { key = key })
+					end
 				end)
 			else
-				UI.text(actions, "↔ To expand, the cell in front of or behind this room must be empty.", 14, C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
+				btn("↩ Cancel", C.card, function()
+					setTool("select", { key = key })
+				end)
 			end
 		end
-		UI.button(actions, "👥 Move students in or out", C.blue, function()
-			showRoom(i)
-		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = nextOrder() })
-		UI.button(actions, "🎨 Decorate this room", Color3.fromRGB(240, 140, 60), function()
-			panelState.area = p.key
-			openPanel("design")
-		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = nextOrder() })
-	else
-		local text
-		if p.kind == "me" then
-			text = "<b>⭐ Your room</b>\nYour bed, desk, wardrobe and the three boards live here."
-		elseif p.kind == "common" then
-			text = "<b>🛋 Common room</b>\nStudents hang out here between classes."
-		else
-			local f = Config.FacilityById[p.id]
-			text = string.format("<b>%s %s</b>\n%s", f.emoji, f.name, f.text)
+		if ds.tool == "select" then
+			if kind == "dorm" then
+				local room = d.rooms[i]
+				local tier = Config.RoomTiers[room.tier]
+				note(string.format("<b>🛏 Room %d</b> • %s\n%d x %d tiles • %d/%d beds", i, tier.name, r.w, r.d, #room.occupants, Config.Beds(room)), C.gold)
+				local nt = Config.RoomTiers[room.tier + 1]
+				if nt then
+					actionButton(side, string.format("⬆ %s (+%d decor)", nt.name, nt.decor), Config.RoomUpgradeCost(i, room.tier + 1), nextOrder(), function()
+						result(call("upgradeRoom", { room = i }), "⬆ Room " .. i .. " is now a " .. nt.name .. "!")
+					end)
+				end
+				btn("👥 Students in this room", C.blue, function()
+					showRoom(i)
+				end)
+			elseif kind == "me" then
+				note("<b>⭐ Your room</b>\nYour bed, desk, wardrobe and the three boards. Always 3 x 6 tiles.", C.gold)
+			elseif kind == "common" then
+				note("<b>🛋 Common room</b>\nStudents hang out here.", C.gold)
+			else
+				local f = Config.FacilityById[fid]
+				note(string.format("<b>%s %s</b>\n%s", f.emoji, f.name, f.text), C.gold)
+			end
+			btn("✥ Move", C.blue, function()
+				setTool("move", { key = key, w = r.w, h = r.d })
+			end)
+			if kind ~= "me" then
+				btn("⤡ Resize", C.blue, function()
+					setTool("resize", { key = key })
+				end)
+			end
+			btn("🚪 Move the door", C.blue, function()
+				setTool("door", { key = key })
+			end)
+			btn("🎨 Decorate", Color3.fromRGB(240, 140, 60), function()
+				panelState.area = key
+				openPanel("design")
+			end)
 		end
-		UI.text(actions, text, 16, C.text, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
-		UI.button(actions, "🎨 Decorate", Color3.fromRGB(240, 140, 60), function()
-			panelState.area = p.key
-			openPanel("design")
-		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = nextOrder() })
+		if r.floor ~= floor then
+			note("(It's on Floor " .. (r.floor + 1) .. ".)")
+		end
+	else
+		note(string.format("<b>%d</b> of %d dorm rooms built.\nTap a room to move it, resize it or change its door. Brown tiles are hallway; the stairs show which way they climb.", #d.rooms, Config.MaxRooms))
+		local legend = floor > 0 and "\n\nDark tiles have nothing under them. With 🏛 supports on the floor below, this floor can hang out " .. House.Overhang .. " tiles over the garden on columns." or ""
+		if legend ~= "" then
+			note(legend)
+		end
+	end
+
+	-- this floor's supports, and the house rules
+	if ds.tool == "select" and not ds.key then
+		local sup = House.supported(d, floor)
+		if floor < Config.MaxFloors - 1 then
+			if sup then
+				btn("🏛 Remove supports from Floor " .. (floor + 1), C.card, function()
+					result(call("plan", { op = "support", floor = floor, on = false }), "🏛 Supports removed.")
+				end)
+			else
+				actionButton(side, "🏛 Add supports to Floor " .. (floor + 1) .. " (the floor above can hang over)", Config.SupportCost(floor), nextOrder(), function()
+					result(call("plan", { op = "support", floor = floor, on = true }), "🏛 Floor " .. (floor + 1) .. " has supports now!")
+				end)
+			end
+		end
+		note("<b>📜 House rules</b>  who applies to your house. Each room is boys or girls, set by its first student.", C.text)
+		for _, key in ipairs({ "Mixed", "Boys", "Girls" }) do
+			local on = d.houseGender == key
+			btn((on and "✓ " or "") .. Config.HouseGenders[key], on and C.purple or C.card, function()
+				if not on then
+					result(call("houseGender", { value = key }), "📜 House rule: " .. Config.HouseGenders[key])
+				end
+			end)
+		end
 	end
 end
 
@@ -1218,7 +1564,7 @@ openPanel = function(id)
 			panelState.room = nil
 		end
 		if id ~= "layout" then
-			panelState.cell = nil
+			panelState.design = nil
 		end
 		panelState.expel = nil
 		scroll.CanvasPosition = Vector2.zero
@@ -1236,6 +1582,16 @@ openPanel = function(id)
 	end
 	clear(toolbar)
 	clear(scroll)
+	local designer = panel:FindFirstChild("Designer")
+	if designer then
+		designer:Destroy()
+	end
+	-- the floor plan designer takes the whole screen (beside the menu)
+	local big = id == "layout"
+	panel.Size = big and UDim2.new(1, -160, 1, -90) or UDim2.fromScale(0.62, 0.72)
+	panel.Position = big and UDim2.new(0.5, 70, 0.5, 30) or UDim2.fromScale(0.52, 0.55)
+	panelSize.MaxSize = big and Vector2.new(4000, 4000) or Vector2.new(820, 620)
+	scroll.Visible = not big
 	local keep = scroll.CanvasPosition
 	local wasVisible = panel.Visible
 	panel.Visible = true
@@ -1284,7 +1640,7 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 				"🛏 Walk out into the hallway, go to a dorm door and press <b>E</b> (or open <b>Rooms</b>) to move your 2 students in. Housed students earn cash every second.",
 				"💞 Every student has <b>tags</b>, and tags decide their <b>vibe</b>. Nerds + Gamers click, Bullies ruin rooms. Good roommates become friends, then best friends. Happy rooms earn up to 2x more.",
 				"🎓 Use <b>Enroll</b> to recruit new students. Find Legendary & Mythic ones and shiny ✨ variants!",
-				"📋 Your room has 3 boards on the wall. <b>Floor plans</b>: choose where new rooms and facilities go, expand rooms, add floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. Walk up and press <b>E</b>.",
+				"📋 Your room has 3 boards on the wall. <b>Floor plans</b>: design your house: hallways, rooms of any size, stairs, supports and new floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. Walk up and press <b>E</b>.",
 				"🎨 Use <b>Build</b> to pick materials for walls, floors and the roof, and to furnish your room. Nicer dorms = happier students!",
 			}
 			local box = UI.card(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -20), Size = UDim2.fromOffset(520, 110), BackgroundColor3 = C.bg })

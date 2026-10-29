@@ -46,7 +46,8 @@ function DataService.Default()
 		discovered = {}, -- [studentId] = true (collection book)
 		tutorialDone = false,
 		floors = 1, -- floors unlocked
-		layout = {}, -- [roomKey] = { floor, side, row } (see shared/House.lua)
+		plan = { floors = { House.defaultHallFloor() }, stairs = {} }, -- hallways, stairs, supports (shared/House.lua)
+		layout = {}, -- [roomKey] = { floor, x, z, w, d, door } (shared/House.lua)
 		styles = {}, -- [area] = { wall = id, floor = id, roof = id } (build mode)
 		furniture = {}, -- [furnitureId] = true (shown) / false (owned, hidden)
 		bonds = {}, -- [Config.BondKey(uidA, uidB)] = -50..100
@@ -58,11 +59,11 @@ function DataService.Default()
 		photoSeq = 0,
 		buffs = {}, -- [uid] = time a great-outing mood boost ends
 	}
-	data.layout.me = table.clone(House.Fixed.me)
-	data.layout.common = table.clone(House.Fixed.common)
+	data.layout.me = { floor = 0, x = House.Default.rightX, z = 0, w = House.MeSize[1], d = House.MeSize[2] }
+	data.layout.common = { floor = 0, x = House.Default.leftX, z = 0, w = 3, d = 3 }
 	for i = 1, Config.StartingRooms do
-		table.insert(data.rooms, { tier = 1, size = 1, occupants = {} })
-		data.layout["r" .. i] = table.clone(House.StartCells[i])
+		table.insert(data.rooms, { tier = 1, area = 9, occupants = {} })
+		data.layout["r" .. i] = { floor = 0, x = House.Default.leftX, z = 3 * i, w = 3, d = 3 }
 	end
 	-- Two free starter students so the loop makes sense immediately.
 	for _, id in ipairs({ "tim", "pete" }) do
@@ -71,6 +72,111 @@ function DataService.Default()
 		data.discovered[id] = true
 	end
 	return data
+end
+
+-- Make data.plan + data.layout a valid house: convert old cell layouts, add
+-- missing floors, and re-place any room that no longer fits.
+local function fixPlan(data)
+	local floors = data.floors
+	local oldCells = data.plan == nil
+	if oldCells then
+		data.plan = { floors = {}, stairs = {} }
+	end
+	for f = 1, floors do
+		if typeof(data.plan.floors[f]) ~= "table" or typeof(data.plan.floors[f].hall) ~= "string" or #data.plan.floors[f].hall ~= House.W * House.D then
+			data.plan.floors[f] = House.defaultHallFloor()
+			data.plan.stairs[f] = nil
+		end
+	end
+	for f = #data.plan.floors, floors + 1, -1 do
+		data.plan.floors[f] = nil
+	end
+	for f = 1, floors - 1 do
+		if typeof(data.plan.stairs[f]) ~= "table" then
+			data.plan.stairs[f] = House.defaultStairs(f - 1)
+		end
+	end
+	for f = floors, Config.MaxFloors do
+		data.plan.stairs[f] = nil
+	end
+
+	-- which rooms should exist, with the size they had
+	local wanted = { { key = "me", w = House.MeSize[1], d = House.MeSize[2] }, { key = "common", w = 3, d = 3 } }
+	for i, room in ipairs(data.rooms) do
+		table.insert(wanted, { key = "r" .. i, w = 3, d = 3 * ((room.size == 2) and 2 or 1) })
+	end
+	for _, fac in ipairs(Config.Facilities) do
+		if data.facilities[fac.id] then
+			table.insert(wanted, { key = "fac:" .. fac.id, w = 3, d = 3 })
+		end
+	end
+	local old = data.layout or {}
+	local function startRect(want)
+		local r = old[want.key]
+		if typeof(r) ~= "table" then
+			return nil
+		end
+		if oldCells or r.w == nil then
+			if typeof(r.side) == "number" and typeof(r.row) == "number" and typeof(r.floor) == "number" then
+				return House.fromCell(r, want.d // 3)
+			end
+			return nil
+		end
+		return { floor = r.floor, x = r.x, z = r.z, w = r.w, d = r.d, door = r.door }
+	end
+
+	-- the hallways and stairs must work on their own; otherwise reset them
+	data.layout = {}
+	if not House.validate(data) then
+		for f = 1, floors do
+			data.plan.floors[f].hall = House.defaultHallFloor().hall
+		end
+		for f = 1, floors - 1 do
+			data.plan.stairs[f] = House.defaultStairs(f - 1)
+		end
+	end
+
+	local homeless = {}
+	for _, want in ipairs(wanted) do
+		local r = startRect(want)
+		if r then
+			data.layout[want.key] = r
+			if not House.validate(data) then
+				data.layout[want.key] = nil
+				table.insert(homeless, want)
+			end
+		else
+			table.insert(homeless, want)
+		end
+	end
+	for _, want in ipairs(homeless) do
+		local placed = false
+		while not placed do
+			for _, dims in ipairs({ { want.w, want.d }, { 3, 3 } }) do
+				if not placed and (want.key ~= "me" or dims[1] == want.w) then
+					local f, x, z, w, d = House.findSpot(data, want.key, dims[1], dims[2])
+					if f then
+						data.layout[want.key] = { floor = f, x = x, z = z, w = w, d = d }
+						placed = true
+					end
+				end
+			end
+			if not placed then
+				if data.floors >= Config.MaxFloors then
+					warn("[BST] no space in the house for", want.key)
+					break
+				end
+				-- grow the house by a floor with the default hallway
+				data.floors += 1
+				data.plan.floors[data.floors] = House.defaultHallFloor()
+				data.plan.stairs[data.floors - 1] = House.defaultStairs(data.floors - 2)
+			end
+		end
+	end
+	House.validate(data) -- settles every door
+	for key, r in pairs(data.layout) do
+		r.door = House.door(data, key)
+	end
 end
 
 -- Fill in fields added in later versions and drop broken references.
@@ -100,9 +206,13 @@ local function reconcile(data)
 	if not Config.HouseGenders[data.houseGender] then
 		data.houseGender = "Mixed"
 	end
-	for _, room in ipairs(data.rooms) do
+	data.order = nil
+	data.floors = math.clamp(math.floor(data.floors or 1), 1, Config.MaxFloors)
+	fixPlan(data)
+	for i, room in ipairs(data.rooms) do
 		room.tier = math.clamp(room.tier or 1, 1, #Config.RoomTiers)
-		room.size = (room.size == 2) and 2 or 1
+		room.size = nil
+		room.area = House.area(data, "r" .. i)
 		-- rooms are single-gender: keep the first occupant's gender
 		local kept, gender = {}, nil
 		for _, uid in ipairs(room.occupants or {}) do
@@ -114,50 +224,6 @@ local function reconcile(data)
 			end
 		end
 		room.occupants = kept
-	end
-	-- every room and facility needs one valid, non-overlapping place in the
-	-- house (older saves had no layout: place everything front to back)
-	data.order = nil
-	data.floors = math.clamp(math.floor(data.floors or 1), 1, Config.MaxFloors)
-	local old = data.layout or {}
-	data.layout = { me = table.clone(House.Fixed.me), common = table.clone(House.Fixed.common) }
-	local wanted = {}
-	for i in ipairs(data.rooms) do
-		table.insert(wanted, "r" .. i)
-	end
-	for _, f in ipairs(Config.Facilities) do
-		if data.facilities[f.id] then
-			table.insert(wanted, "fac:" .. f.id)
-		end
-	end
-	local homeless = {}
-	for _, key in ipairs(wanted) do
-		local cell = old[key]
-		local size = House.size(data, key)
-		if typeof(cell) == "table" and House.isFree(data, cell.floor, cell.side, cell.row, size) then
-			data.layout[key] = { floor = cell.floor, side = cell.side, row = cell.row }
-		else
-			table.insert(homeless, key)
-		end
-	end
-	for _, key in ipairs(homeless) do
-		local size = House.size(data, key)
-		local f, side, row = House.firstFree(data, size)
-		while not f and data.floors < Config.MaxFloors do
-			data.floors += 1
-			f, side, row = House.firstFree(data, size)
-		end
-		if not f and size == 2 then
-			-- no room left for a big room: shrink it
-			local i = tonumber(string.match(key, "^r(%d+)$"))
-			data.rooms[i].size = 1
-			f, side, row = House.firstFree(data, 1)
-		end
-		if f then
-			data.layout[key] = { floor = f, side = side, row = row }
-		else
-			warn("[BST] no space in the house for", key)
-		end
 	end
 	return data
 end
