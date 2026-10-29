@@ -100,6 +100,48 @@ local function hangouts(st)
 	return list
 end
 
+-- living room items: fans of an item's tags walk up and use it for a while
+local taken = {} -- [spot] = model
+local function findSpot(st, model)
+	local tags = string.split(model:GetAttribute("Tags") or "", ",")
+	local options = {}
+	for _, sp in ipairs(CollectionService:GetTagged("UseSpot")) do
+		if sp.Parent and not taken[sp] and sp:GetAttribute("PlotIndex") == st.plot and sp:GetAttribute("Floor") == st.floor then
+			local inArea = (sp.Position - st.area.center).Magnitude < st.area.range.Magnitude + 4
+			local wanted = string.split(sp:GetAttribute("UseTags") or "", ",")
+			if inArea then
+				for _, t in ipairs(tags) do
+					if table.find(wanted, t) then
+						table.insert(options, sp)
+						break
+					end
+				end
+			end
+		end
+	end
+	return #options > 0 and options[math.random(1, #options)] or nil
+end
+
+local function useBubble(model, emoji)
+	local head = model:FindFirstChild("Head")
+	if not head then
+		return
+	end
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(44, 44)
+	bb.StudsOffset = Vector3.new(0, 4.2, 0)
+	bb.MaxDistance = 80
+	bb.Adornee = head
+	local t = Instance.new("TextLabel")
+	t.BackgroundTransparency = 1
+	t.Size = UDim2.fromScale(1, 1)
+	t.TextScaled = true
+	t.Text = emoji
+	t.Parent = bb
+	bb.Parent = head
+	Debris:AddItem(bb, 3)
+end
+
 -- door-to-door route through the hallway
 local function route(from, to)
 	local points = {}
@@ -142,13 +184,26 @@ local function add(model)
 	walkers[model] = st
 end
 
-local function decide(st)
+local function decide(st, model)
+	if st.using then
+		taken[st.using.spot] = nil
+		st.using = nil
+	end
 	if st.area ~= st.home then
 		st.outingStops -= 1
 		if st.outingStops <= 0 then
 			st.queue = route(st.area, st.home)
 			st.area = st.home
 			return
+		end
+		if math.random() < 0.6 then
+			local sp = findSpot(st, model)
+			if sp then
+				taken[sp] = model
+				st.using = { spot = sp, arrived = false }
+				st.queue = { sp.Position }
+				return
+			end
 		end
 	elseif math.random() < OUTING_CHANCE then
 		local spots = hangouts(st)
@@ -167,6 +222,10 @@ CollectionService:GetInstanceAddedSignal("Student"):Connect(function(m)
 	task.defer(add, m)
 end)
 CollectionService:GetInstanceRemovedSignal("Student"):Connect(function(m)
+	local st = walkers[m]
+	if st and st.using then
+		taken[st.using.spot] = nil
+	end
 	walkers[m] = nil
 end)
 for _, m in ipairs(CollectionService:GetTagged("Student")) do
@@ -189,9 +248,21 @@ RunService.RenderStepped:Connect(function(dt)
 			elseif delta.Magnitude < 0.3 then
 				if #st.queue > 0 then
 					st.target = table.remove(st.queue, 1)
+				elseif st.using and not st.using.arrived and st.using.spot.Parent then
+					-- at the item: face it and hang out with it for a bit
+					st.using.arrived = true
+					local face = st.using.spot:GetAttribute("Face")
+					if face then
+						local f = Vector3.new(face.X - st.pos.X, 0, face.Z - st.pos.Z)
+						if f.Magnitude > 0.1 then
+							st.dir = f.Unit
+						end
+					end
+					st.wait = 5 + math.random() * 5
+					useBubble(model, st.using.spot:GetAttribute("Use") or "✨")
 				else
 					st.wait = 1 + math.random() * 3
-					decide(st)
+					decide(st, model)
 					st.target = table.remove(st.queue, 1)
 				end
 			else

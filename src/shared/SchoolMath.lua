@@ -81,6 +81,20 @@ local function facilityBonus(data, def)
 			mult += f.incomeMult or 0
 		end
 	end
+	-- living room items: +boost per item that matches one of the student's tags
+	if def and data.facilities and data.facilities.living then
+		for itemId in pairs(data.livingItems or {}) do
+			local item = Config.LivingItemById[itemId]
+			if item then
+				for _, t in ipairs(def.tags) do
+					if table.find(item.tags, t) then
+						mood += Config.LivingItemBoost
+						break
+					end
+				end
+			end
+		end
+	end
 	return mood, mult
 end
 

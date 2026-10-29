@@ -1044,6 +1044,35 @@ function Render.design()
 		order += 2
 	end
 
+	if area.key == "fac:living" then
+		UI.text(scroll, string.format("<b>🛋 Living room items</b> — each gives +%d mood to every student with a matching tag, and they come over to use it", Config.LivingItemBoost), 20, C.gold, { LayoutOrder = order, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+		for i, it in ipairs(Config.LivingItems) do
+			local owned = d.livingItems and d.livingItems[it.id]
+			local card = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 54), LayoutOrder = order + i })
+			UI.pad(card, 8)
+			UI.text(card, it.emoji .. " " .. it.name, 18, C.text, { Size = UDim2.new(0.65, 0, 0, 22) })
+			local fans = {}
+			for _, t in ipairs(it.tags) do
+				table.insert(fans, Config.Tags[t].emoji .. " " .. Config.Tags[t].name)
+			end
+			UI.text(card, "+" .. Config.LivingItemBoost .. " for " .. table.concat(fans, ", "), 14, C.green, { Position = UDim2.fromOffset(0, 22), Size = UDim2.new(0.65, 0, 0, 18) })
+			local blocked = it.needs and not (d.livingItems and d.livingItems[it.needs])
+			local text, color
+			if owned then
+				text, color = "✓ Owned", C.card
+			elseif blocked then
+				text, color = "Needs " .. Config.LivingItemById[it.needs].name, Color3.fromRGB(110, 110, 120)
+			else
+				text, color = "Buy $" .. fmt(it.cost), d.cash >= it.cost and C.green or Color3.fromRGB(110, 110, 120)
+			end
+			UI.button(card, text, color, function()
+				if not owned then
+					result(call("livingItem", { id = it.id }), it.emoji .. " " .. it.name .. " is in the living room!")
+				end
+			end, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(150, 36), TextSize = 14 })
+		end
+	end
+
 	if area.key == "me" then
 		UI.text(scroll, "<b>🛋 Furniture</b> — every piece gives your whole house a small income boost", 20, C.gold, { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 28) })
 		for i, f in ipairs(Config.Furniture) do

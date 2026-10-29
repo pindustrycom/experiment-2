@@ -576,6 +576,7 @@ local function finishStudent(m, uid, student, head, root)
 	local r = label(bb, Config.TagEmoji(def) .. " " .. def.rarity, rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
 	r.Name = "RarityLabel"
 	m:SetAttribute("StudentUid", uid)
+	m:SetAttribute("Tags", table.concat(def.tags, ","))
 	CollectionService:AddTag(m, "Student")
 	return m
 end
@@ -924,6 +925,84 @@ function FacilityProps.observatory(m, r)
 	prop(m, r, 4, 1.7, -5, Vector3.new(2.2, 2.2, 2.2), Color3.fromRGB(70, 140, 220), { Shape = Enum.PartType.Ball })
 end
 
+-- a spot where a student stands to use an item; Animator walks fans of the
+-- item's tags here (attributes: Use emoji, UseTags, Face point)
+local function useSpot(m, r, u, v, item, faceU, faceV)
+	local sp = prop(m, r, u, 0.1, v, Vector3.new(0.5, 0.1, 0.5), Color3.new(1, 1, 1), { Name = "UseSpot", Transparency = 1, CanCollide = false, CanQuery = false })
+	sp:SetAttribute("Use", item.use)
+	sp:SetAttribute("UseTags", table.concat(item.tags, ","))
+	sp:SetAttribute("Face", (r * CFrame.new(faceU, 0, faceV)).Position)
+	return sp
+end
+
+function FacilityProps.living(m, r, data)
+	local items = data.livingItems or {}
+	local sofa = Color3.fromRGB(170, 110, 80)
+	cyl(m, r, 9, 0.28, 0, 0.1, 10, Color3.fromRGB(200, 170, 130), { Material = Enum.Material.Fabric })
+	-- sofa facing the outside wall
+	prop(m, r, 5.5, 1.1, 0, Vector3.new(3, 1.2, 8), sofa, { Material = Enum.Material.Fabric })
+	prop(m, r, 4.3, 2.3, 0, Vector3.new(0.8, 2.2, 8), sofa, { Material = Enum.Material.Fabric })
+	for _, v in ipairs({ -4.3, 4.3 }) do
+		prop(m, r, 5.3, 1.8, v, Vector3.new(3.2, 1.6, 0.8), sofa:Lerp(Color3.new(0, 0, 0), 0.1), { Material = Enum.Material.Fabric })
+	end
+	for i, v in ipairs({ -2, 2 }) do
+		prop(m, r, 4.9, 2.6, v, Vector3.new(0.5, 1.3, 1.5), i == 1 and Color3.fromRGB(240, 200, 90) or Color3.fromRGB(120, 170, 220), { Material = Enum.Material.Fabric, Rot = CFrame.Angles(0, 0, -0.2) })
+	end
+	-- coffee table
+	prop(m, r, 9.5, 1.5, 0, Vector3.new(2.6, 0.25, 4.5), WOOD, { Material = Enum.Material.Wood })
+	for _, du in ipairs({ -1, 1 }) do
+		for _, dv in ipairs({ -1.9, 1.9 }) do
+			prop(m, r, 9.5 + du, 0.7, dv, Vector3.new(0.25, 1.4, 0.25), WOOD:Lerp(Color3.new(0, 0, 0), 0.3))
+		end
+	end
+	-- TV wall
+	prop(m, r, ROOM_U - 1.2, 1, 0, Vector3.new(1.8, 2, 7), WOOD:Lerp(Color3.new(0, 0, 0), 0.35), { Material = Enum.Material.Wood })
+	if items.tv then
+		prop(m, r, ROOM_U - 0.7, 4.6, 0, Vector3.new(0.3, 3.4, 6), DARK)
+		local screen = prop(m, r, ROOM_U - 0.88, 4.6, 0, Vector3.new(0.05, 3, 5.6), Color3.fromRGB(70, 140, 220), { Material = Enum.Material.Neon, Transparency = 0.15 })
+		light(screen, 12, Color3.fromRGB(120, 170, 255))
+		useSpot(m, r, 6.4, -1.8, Config.LivingItemById.tv, ROOM_U, -1.8)
+	end
+	if items.console then
+		prop(m, r, ROOM_U - 1.4, 2.2, -2, Vector3.new(1.2, 0.4, 1.6), Color3.fromRGB(240, 240, 245))
+		prop(m, r, 9.3, 1.75, -1, Vector3.new(0.6, 0.2, 0.9), DARK)
+		prop(m, r, 9.6, 1.75, 1.2, Vector3.new(0.6, 0.2, 0.9), DARK)
+		useSpot(m, r, 6.4, 1.8, Config.LivingItemById.console, ROOM_U, 1.8)
+	end
+	if items.acoustic then
+		prop(m, r, ROOM_U - 2, 0.9, -6.5, Vector3.new(0.6, 1.8, 0.6), DARK, { Rot = CFrame.Angles(0, 0, 0.1) })
+		prop(m, r, ROOM_U - 2, 2.2, -6.5, Vector3.new(0.4, 2, 1.6), Color3.fromRGB(205, 150, 90), { Material = Enum.Material.Wood })
+		prop(m, r, ROOM_U - 2, 4.1, -6.5, Vector3.new(0.25, 2.2, 0.3), Color3.fromRGB(70, 45, 25), { Material = Enum.Material.Wood })
+		useSpot(m, r, ROOM_U - 5, -6, Config.LivingItemById.acoustic, ROOM_U - 2, -6.5)
+	end
+	if items.electric then
+		prop(m, r, ROOM_U - 1.6, 1.2, 6.4, Vector3.new(1.6, 2.4, 2.2), Color3.fromRGB(25, 25, 28), { Material = Enum.Material.Leather })
+		prop(m, r, ROOM_U - 2.42, 1.2, 6.4, Vector3.new(0.05, 1.6, 1.7), Color3.fromRGB(60, 60, 65), { Material = Enum.Material.Fabric })
+		prop(m, r, ROOM_U - 2.44, 2.2, 5.8, Vector3.new(0.05, 0.2, 0.2), Color3.fromRGB(255, 60, 60), { Material = Enum.Material.Neon })
+		prop(m, r, ROOM_U - 2.8, 2.2, 4.6, Vector3.new(0.35, 2, 1.4), Color3.fromRGB(200, 30, 40), { Rot = CFrame.Angles(0, 0, -0.15) })
+		prop(m, r, ROOM_U - 2.6, 4, 4.6, Vector3.new(0.2, 2, 0.25), Color3.fromRGB(240, 240, 240), { Rot = CFrame.Angles(0, 0, -0.15) })
+		useSpot(m, r, ROOM_U - 5, 5.5, Config.LivingItemById.electric, ROOM_U - 2, 6.4)
+	end
+	if items.vr then
+		cyl(m, r, 2.6, 1.5, -6.3, 3, 1.2, Color3.fromRGB(235, 235, 240))
+		prop(m, r, 2.6, 3.2, -6.3, Vector3.new(0.9, 0.5, 1.2), Color3.fromRGB(30, 30, 35))
+		prop(m, r, 2.6, 3.2, -6.3, Vector3.new(0.95, 0.15, 1.25), Color3.fromRGB(120, 80, 255), { Material = Enum.Material.Neon })
+		useSpot(m, r, 4.5, -5.6, Config.LivingItemById.vr, 9, -2)
+	end
+	if items.canvas then
+		prop(m, r, 2.8, 2.6, 6, Vector3.new(0.3, 5.2, 0.3), WOOD, { Rot = CFrame.Angles(0, 0, -0.15) })
+		prop(m, r, 2.3, 2.6, 6, Vector3.new(0.3, 5, 0.3), WOOD, { Rot = CFrame.Angles(0, 0, 0.15) })
+		prop(m, r, 3, 4, 6, Vector3.new(0.12, 2.8, 2.4), Color3.fromRGB(250, 248, 240), { Material = Enum.Material.Fabric })
+		prop(m, r, 3.08, 4.2, 5.6, Vector3.new(0.05, 1, 1), Color3.fromRGB(90, 160, 230))
+		prop(m, r, 3.08, 3.6, 6.5, Vector3.new(0.05, 0.9, 0.9), Color3.fromRGB(240, 120, 90))
+		useSpot(m, r, 5, 6, Config.LivingItemById.canvas, 3, 6)
+	end
+	-- floor lamp in the corner
+	cyl(m, r, 2, 3, 7.2, 6, 0.25, DARK)
+	local shade = cyl(m, r, 2, 6.2, 7.2, 1.2, 1.4, Color3.fromRGB(250, 235, 200), { Material = Enum.Material.Fabric })
+	light(shade, 12)
+end
+
 local function commonProps(m, r)
 	prop(m, r, ROOM_U - 0.6, 4.4, 0, Vector3.new(0.3, 3.2, 6), DARK)
 	prop(m, r, ROOM_U - 0.8, 4.4, 0, Vector3.new(0.05, 2.8, 5.6), Color3.fromRGB(90, 160, 255), { Material = Enum.Material.Neon })
@@ -1187,6 +1266,9 @@ local function signature(plot, data)
 	for fid, shown in pairs(data.furniture) do
 		table.insert(keys, "furn:" .. fid .. "=" .. tostring(shown))
 	end
+	for id in pairs(data.livingItems or {}) do
+		table.insert(keys, "living:" .. id)
+	end
 	table.sort(keys)
 	table.insert(parts, table.concat(keys, ";"))
 	return table.concat(parts, "|")
@@ -1427,7 +1509,14 @@ local function renderStructure(plot, data)
 					elseif s.kind == "common" then
 						commonProps(m, rcf)
 					elseif s.kind == "facility" and FacilityProps[s.id] then
-						FacilityProps[s.id](m, rcf)
+						FacilityProps[s.id](m, rcf, data)
+						for _, sp in ipairs(m:GetDescendants()) do
+							if sp:GetAttribute("UseTags") then
+								sp:SetAttribute("PlotIndex", plot.index)
+								sp:SetAttribute("Floor", info.floor)
+								CollectionService:AddTag(sp, "UseSpot")
+							end
+						end
 					elseif s.kind == "dorm" then
 						local room = data.rooms[s.index]
 						if room and room.tier >= 2 then

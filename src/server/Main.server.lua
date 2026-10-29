@@ -374,6 +374,24 @@ function Actions.unassign(player, data, args)
 	return { ok = true }
 end
 
+function Actions.livingItem(player, data, args)
+	local item = typeof(args.id) == "string" and Config.LivingItemById[args.id]
+	if not item or data.livingItems[item.id] then
+		return { ok = false }
+	end
+	if not data.facilities.living then
+		return { ok = false, err = "Build a Living Room first (floor plans board)." }
+	end
+	if item.needs and not data.livingItems[item.needs] then
+		return { ok = false, err = "Needs the " .. Config.LivingItemById[item.needs].name .. " first." }
+	end
+	if not spend(data, item.cost) then
+		return { ok = false, err = "Not enough cash!" }
+	end
+	data.livingItems[item.id] = true
+	return { ok = true }
+end
+
 function Actions.houseGender(player, data, args)
 	if not Config.HouseGenders[args.value] then
 		return { ok = false }
@@ -833,6 +851,39 @@ local function tickBonds(data)
 	end
 end
 
+-- students who love the same living room item hang out there and bond a little
+local function tickHangouts(data)
+	if not data.facilities.living then
+		return
+	end
+	local housed = {}
+	for _, room in ipairs(data.rooms) do
+		for _, uid in ipairs(room.occupants) do
+			table.insert(housed, uid)
+		end
+	end
+	for itemId in pairs(data.livingItems) do
+		local item = Config.LivingItemById[itemId]
+		local fans = {}
+		for _, uid in ipairs(housed) do
+			local def = Config.StudentById[data.students[uid].id]
+			for _, t in ipairs(def.tags) do
+				if item and table.find(item.tags, t) then
+					table.insert(fans, uid)
+					break
+				end
+			end
+		end
+		for _ = 1, math.min(4, #fans // 2) do
+			local a, b = fans[math.random(1, #fans)], fans[math.random(1, #fans)]
+			if a ~= b then
+				local key = Config.BondKey(a, b)
+				data.bonds[key] = math.clamp((data.bonds[key] or 0) + 2, Config.BondMin, Config.BondMax)
+			end
+		end
+	end
+end
+
 task.spawn(function()
 	while true do
 		task.wait(Config.BondTick)
@@ -840,6 +891,7 @@ task.spawn(function()
 			local data = DataService.Get(player)
 			if data then
 				tickBonds(data)
+				tickHangouts(data)
 				recompute(player)
 				pushState(player)
 			end

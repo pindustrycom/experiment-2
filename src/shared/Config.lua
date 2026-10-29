@@ -334,6 +334,7 @@ end
 -- Built from the floor layout board in your room.
 ---------------------------------------------------------------------------
 Config.Facilities = {
+	{ id = "living", name = "Living Room", emoji = "🛋", cost = 4000, all = 2, text = "+2 mood for everyone. Buy items inside for tagged students", color = Color3.fromRGB(200, 150, 100) },
 	{ id = "cafeteria", name = "Cafeteria", emoji = "🍕", cost = 2000, all = 5, text = "+5 mood for everyone", color = Color3.fromRGB(255, 160, 80) },
 	{ id = "library", name = "Library", emoji = "📚", cost = 6000, boost = { Nerd = 10, Indie = 4 }, text = "+10 Nerds, +4 Indies", color = Color3.fromRGB(120, 80, 50) },
 	{ id = "gym", name = "Gym", emoji = "🏋", cost = 6000, boost = { Jock = 10, Alpha = 4, Chad = 4 }, text = "+10 Jocks, +4 Alphas and Chads", color = Color3.fromRGB(200, 60, 60) },
@@ -344,6 +345,22 @@ Config.Facilities = {
 	{ id = "ballroom", name = "Grand Ballroom", emoji = "💃", cost = 200000, boost = { RichKid = 12, Charismatic = 6 }, text = "+12 Rich Kids, +6 Charismatics", color = Color3.fromRGB(250, 210, 100) },
 	{ id = "observatory", name = "Observatory", emoji = "🔭", cost = 1000000, all = 5, incomeMult = 0.3, text = "+5 mood, +30% income", color = Color3.fromRGB(70, 60, 140) },
 }
+-- Living room items (bought in Build mode once the living room is built).
+-- Every housed student with one of `tags` gets +Config.LivingItemBoost.
+Config.LivingItems = {
+	{ id = "acoustic", name = "Acoustic Guitar", emoji = "🪕", use = "🎶", cost = 2500, tags = { "Musician", "Carefree", "Charismatic" } },
+	{ id = "electric", name = "Electric Guitar + Amp", emoji = "🎸", use = "🤘", cost = 6000, tags = { "Musician", "Indie", "Alpha" } },
+	{ id = "tv", name = "TV", emoji = "📺", use = "📺", cost = 3000, tags = { "Sleepy", "Funny", "Jock" } },
+	{ id = "console", name = "Game Console", emoji = "🎮", use = "🕹", cost = 5000, needs = "tv", tags = { "Gamer", "Nerd" } },
+	{ id = "vr", name = "VR Headset", emoji = "🥽", use = "🌀", cost = 12000, tags = { "Gamer", "Nerd", "Chud" } },
+	{ id = "canvas", name = "Canvas + Easel", emoji = "🖼", use = "🎨", cost = 2000, tags = { "Artistic", "Indie" } },
+}
+Config.LivingItemBoost = 8
+Config.LivingItemById = {}
+for _, it in ipairs(Config.LivingItems) do
+	Config.LivingItemById[it.id] = it
+end
+
 Config.FacilityById = {}
 for _, f in ipairs(Config.Facilities) do
 	Config.FacilityById[f.id] = f
