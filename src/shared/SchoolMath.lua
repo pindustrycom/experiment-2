@@ -76,33 +76,34 @@ function SchoolMath.room(data, index, occupantUids, globalMult)
 	local roommates = #defs - 1
 
 	for _, d in ipairs(defs) do
-		local sat = Config.BaseSatisfaction + decor
-		local fMood = facilityBonus(data, d.def.personality)
-		sat += fMood
+		-- parts explain the score on the satisfaction board
+		local parts = { base = Config.BaseSatisfaction, decor = decor, facilities = 0, chemistry = 0, friends = 0, trait = 0 }
+		parts.facilities = facilityBonus(data, d.def.personality)
 		for _, other in ipairs(defs) do
 			if other.uid ~= d.uid then
 				local c = SchoolMath.pairChemistry(d.def, other.def)
 				if peace and c < 0 then
 					c = 0
 				end
-				sat += c * Config.ChemistryPoints
-				sat += moodAura[other.uid] or 0
+				parts.chemistry += c * Config.ChemistryPoints
+				parts.friends += moodAura[other.uid] or 0
 			end
 		end
 		local t = d.def.trait
 		if t then
 			if t.kind == "Loner" and roommates == 0 then
-				sat += t.value
+				parts.trait += t.value
 			elseif t.kind == "Social" then
-				sat += t.value * roommates
+				parts.trait += t.value * roommates
 			end
 		end
+		local sat = parts.base + parts.decor + parts.facilities + parts.chemistry + parts.friends + parts.trait
 		sat = math.clamp(sat, 0, 100)
 
 		local rarity = Config.Rarities[d.def.rarity]
 		local base = rarity.income * (d.s.shiny and Config.ShinyMultiplier or 1)
 		local income = base * (0.25 + sat / 50) * goldMult * facMult * globalMult
-		result.students[d.uid] = { sat = sat, income = income }
+		result.students[d.uid] = { sat = sat, income = income, parts = parts }
 		result.satisfaction += sat
 		result.income += income
 	end

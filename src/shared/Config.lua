@@ -157,15 +157,33 @@ Config.DailyFreeBanner = "honors"
 Config.DailyCooldown = 20 * 3600
 
 ---------------------------------------------------------------------------
--- The house: dorm rooms, upgrades
--- Everything lives in one walkable house. Each floor has a hallway with
--- rooms on both sides (Config.SlotsPerFloor). Your own room and the common
--- room take the first two slots, then dorms and facility rooms fill the
--- house in the order you build them.
+-- The house: floors, dorm rooms, upgrades
+-- Everything lives in one walkable house. Each floor is a hallway with a row
+-- of cells on each side (Config.SlotsPerFloor cells per floor). Your room
+-- takes 2 cells and the common room 1, both on the ground floor. You choose
+-- which cell every new dorm or facility goes in on the floor layout board,
+-- and dorms can be expanded into the cell next to them.
 ---------------------------------------------------------------------------
 Config.SlotsPerFloor = 12
 Config.MaxRooms = 40 -- dorm rooms
 Config.StartingRooms = 2
+Config.MaxFloors = 6
+
+-- price of unlocking floor n (2, 3, ...)
+function Config.FloorCost(n)
+	return math.floor(5000 * 7 ^ (n - 2) / 100 + 0.5) * 100
+end
+
+-- expanding a dorm into the empty cell beside it: more beds and more space
+Config.BigRoomBeds = 2
+Config.BigRoomDecor = 6
+function Config.ExpandCost(index)
+	return math.floor(2500 * (1 + 0.4 * (index - 1)) / 10 + 0.5) * 10
+end
+
+function Config.Beds(room)
+	return Config.RoomTiers[room.tier].beds + ((room.size or 1) >= 2 and Config.BigRoomBeds or 0)
+end
 
 function Config.RoomUnlockCost(index)
 	-- index is the room number being bought (3, 4, 5 ...)
@@ -190,7 +208,7 @@ end
 
 ---------------------------------------------------------------------------
 -- Facilities: rooms inside the house that boost everyone or a personality.
--- Bought from the storyboard in your room.
+-- Built from the floor layout board in your room.
 ---------------------------------------------------------------------------
 Config.Facilities = {
 	{ id = "cafeteria", name = "Cafeteria", emoji = "🍕", cost = 2000, all = 5, text = "+5 mood for everyone", color = Color3.fromRGB(255, 160, 80) },
@@ -265,14 +283,14 @@ Config.DefaultStyles = {
 }
 
 ---------------------------------------------------------------------------
--- Your own room. Furniture is bought once and can be hidden/shown for free.
+-- Your own room. It always has a bed, a desk and a wardrobe. Extra furniture is bought once and can be hidden/shown for free.
 -- Each piece makes the whole school a little more productive (+income).
 ---------------------------------------------------------------------------
 Config.Furniture = {
 	{ id = "rug", name = "Round Rug", emoji = "🟣", cost = 200, incomeMult = 0.01 },
 	{ id = "plant", name = "Potted Plant", emoji = "🪴", cost = 350, incomeMult = 0.01 },
 	{ id = "lamp", name = "Floor Lamp", emoji = "💡", cost = 600, incomeMult = 0.01 },
-	{ id = "desk", name = "Headmaster's Desk", emoji = "🗄", cost = 1500, incomeMult = 0.02 },
+	{ id = "posters", name = "Band Posters", emoji = "🖼", cost = 1500, incomeMult = 0.02 },
 	{ id = "bookshelf", name = "Bookshelf", emoji = "📚", cost = 4000, incomeMult = 0.02 },
 	{ id = "beanbag", name = "Beanbag", emoji = "🛋", cost = 8000, incomeMult = 0.02 },
 	{ id = "gaming", name = "Gaming Setup", emoji = "🎮", cost = 25000, incomeMult = 0.03 },

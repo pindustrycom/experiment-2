@@ -1,9 +1,11 @@
--- House layout + storyboard notes. Shared so the server renders exactly what
--- the client panels describe.
+-- House layout: which room sits in which cell of which floor. Shared so the
+-- server renders exactly what the client's layout board shows.
 --
--- Every floor is a hallway running front to back with rooms on both sides.
--- Slot 1 is your own room, slot 2 the common room, then dorms and facility
--- rooms fill the house in the order you build them (data.order).
+-- Every floor is a hallway running front to back with House.Rows cells on
+-- each side (side -1 = left, +1 = right when you walk in the front door; row 0
+-- is at the front). data.layout[key] = { floor, side, row } is the first cell
+-- a room uses; a room of size 2 also uses the next row. Keys: "me" (your
+-- room), "common", "r<i>" (dorm i), "fac:<id>" (facility).
 local Config = require(script.Parent.Config)
 
 local House = {}
@@ -12,14 +14,19 @@ local House = {}
 House.FloorHeight = 12
 House.Bounds = { x = 25, z0 = -45, z1 = 75, floorY = 1.2 } -- house footprint in plot space, ground floor height
 
-House.MaxSlots = 2 + Config.MaxRooms + #Config.Facilities
-House.MaxFloors = math.ceil(House.MaxSlots / Config.SlotsPerFloor)
+House.Rows = Config.SlotsPerFloor / 2
+House.MaxFloors = Config.MaxFloors
 
-function House.slotPosition(n)
-	local floor = math.floor((n - 1) / Config.SlotsPerFloor)
-	local k = (n - 1) % Config.SlotsPerFloor
-	return floor, (k % 2 == 0) and 1 or -1, math.floor(k / 2) -- floor, side (+1 right / -1 left), row (0 = front)
-end
+-- rooms that are always there
+House.Fixed = {
+	me = { floor = 0, side = 1, row = 0 },
+	common = { floor = 0, side = -1, row = 0 },
+}
+-- where the starting dorms go
+House.StartCells = {
+	{ floor = 0, side = -1, row = 1 },
+	{ floor = 0, side = -1, row = 2 },
+}
 
 local function describe(key)
 	if key == "me" or key == "common" then
@@ -37,38 +44,130 @@ local function describe(key)
 end
 House.describe = describe
 
--- { key, kind, index, id, slot, floor, side, row }
-function House.slots(data)
-	local list = {}
-	local keys = { "me", "common" }
-	for _, key in ipairs(data.order or {}) do
-		table.insert(keys, key)
+function House.size(data, key)
+	if key == "me" then
+		return 2
 	end
-	for n, key in ipairs(keys) do
-		local kind, index, id = describe(key)
-		local floor, side, row = House.slotPosition(n)
-		table.insert(list, { key = key, kind = kind, index = index, id = id, slot = n, floor = floor, side = side, row = row })
-	end
-	return list
-end
-
-function House.floorOf(data, key)
-	for _, s in ipairs(House.slots(data)) do
-		if s.key == key then
-			return s.floor + 1
-		end
+	local kind, index = describe(key)
+	if kind == "dorm" then
+		local room = data.rooms[index]
+		return room and room.size or 1
 	end
 	return 1
 end
 
 function House.floorCount(data)
-	return math.ceil((2 + #(data.order or {})) / Config.SlotsPerFloor)
+	return data.floors or 1
 end
 
--- would building one more room/facility open a new floor?
-function House.nextIsNewFloor(data)
-	local n = 2 + #(data.order or {}) + 1
-	return n > 1 and (n - 1) % Config.SlotsPerFloor == 0
+-- { key, kind, index, id, floor, side, row, size }
+function House.placements(data)
+	local list = {}
+	for key, cell in pairs(data.layout or {}) do
+		local kind, index, id = describe(key)
+		if kind then
+			table.insert(list, { key = key, kind = kind, index = index, id = id, floor = cell.floor, side = cell.side, row = cell.row, size = House.size(data, key) })
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.floor ~= b.floor then
+			return a.floor < b.floor
+		elseif a.row ~= b.row then
+			return a.row < b.row
+		end
+		return a.side < b.side
+	end)
+	return list
+end
+
+-- grid[floor][side][row] = placement
+function House.grid(data)
+	local grid = {}
+	for f = 0, House.floorCount(data) - 1 do
+		grid[f] = { [-1] = {}, [1] = {} }
+	end
+	for _, p in ipairs(House.placements(data)) do
+		for r = p.row, p.row + p.size - 1 do
+			if grid[p.floor] and grid[p.floor][p.side] then
+				grid[p.floor][p.side][r] = p
+			end
+		end
+	end
+	return grid
+end
+
+function House.validCell(data, floor, side, row, size)
+	return typeof(floor) == "number" and typeof(row) == "number" and (side == 1 or side == -1)
+		and floor % 1 == 0 and row % 1 == 0
+		and floor >= 0 and floor < House.floorCount(data)
+		and row >= 0 and row + (size or 1) - 1 < House.Rows
+end
+
+function House.isFree(data, floor, side, row, size, ignoreKey)
+	if not House.validCell(data, floor, side, row, size) then
+		return false
+	end
+	local grid = House.grid(data)
+	for r = row, row + (size or 1) - 1 do
+		local p = grid[floor][side][r]
+		if p and p.key ~= ignoreKey then
+			return false
+		end
+	end
+	return true
+end
+
+-- first free cell (front to back, floor by floor), or nil if the house is full
+function House.firstFree(data, size)
+	for f = 0, House.floorCount(data) - 1 do
+		for row = 0, House.Rows - 1 do
+			for _, side in ipairs({ 1, -1 }) do
+				if House.isFree(data, f, side, row, size) then
+					return f, side, row
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- how dorm i could grow into a neighbouring cell: returns the new first row
+function House.expandRow(data, index)
+	local key = "r" .. index
+	local cell = data.layout[key]
+	local room = data.rooms[index]
+	if not cell or not room or (room.size or 1) >= 2 then
+		return nil
+	end
+	if House.isFree(data, cell.floor, cell.side, cell.row + 1, 1) then
+		return cell.row
+	elseif House.isFree(data, cell.floor, cell.side, cell.row - 1, 1) then
+		return cell.row - 1
+	end
+	return nil
+end
+
+function House.floorOf(data, key)
+	local cell = data.layout and data.layout[key]
+	return cell and cell.floor + 1 or 1
+end
+
+function House.freeCells(data)
+	local n = 0
+	for f = 0, House.floorCount(data) - 1 do
+		for row = 0, House.Rows - 1 do
+			for _, side in ipairs({ 1, -1 }) do
+				if House.isFree(data, f, side, row, 1) then
+					n += 1
+				end
+			end
+		end
+	end
+	return n
+end
+
+function House.cellName(cell)
+	return string.format("Floor %d, %s side, %s", cell.floor + 1, cell.side == 1 and "right" or "left", cell.row == 0 and "by the front door" or ("row " .. (cell.row + 1)))
 end
 
 function House.areaDefaults(key)
@@ -93,7 +192,8 @@ end
 -- extra satisfaction a dorm room gets from its walls and floor
 function House.roomDecor(data, index)
 	local key = "r" .. index
-	return (House.style(data, key, "wall").decor or 0) + (House.style(data, key, "floor").decor or 0)
+	local big = House.size(data, key) >= 2 and Config.BigRoomDecor or 0
+	return (House.style(data, key, "wall").decor or 0) + (House.style(data, key, "floor").decor or 0) + big
 end
 
 -- every area the player can paint, in display order
@@ -122,67 +222,6 @@ function House.validArea(data, key)
 		end
 	end
 	return nil
-end
-
----------------------------------------------------------------------------
--- Storyboard notes: everything you can build, pinned to the wall of your room
----------------------------------------------------------------------------
-House.NoteColors = {
-	room = Color3.fromRGB(255, 235, 120),
-	upgrade = Color3.fromRGB(150, 220, 255),
-	facility = Color3.fromRGB(255, 180, 210),
-}
-
--- { key, kind, emoji, title, text, cost, newFloor }, cheapest first
-function House.notes(data)
-	local notes = {}
-	local newFloor = House.nextIsNewFloor(data)
-	local nextFloor = House.floorCount(data) + 1
-	local roomIndex = #data.rooms + 1
-	if roomIndex <= Config.MaxRooms then
-		table.insert(notes, {
-			key = "room",
-			kind = "room",
-			emoji = newFloor and "🏗" or "🛏",
-			title = newFloor and ("Build floor " .. nextFloor) or ("New dorm room"),
-			text = newFloor and ("Opens floor " .. nextFloor .. " with Room " .. roomIndex) or ("Room " .. roomIndex .. " • 2 beds"),
-			cost = Config.RoomUnlockCost(roomIndex),
-			newFloor = newFloor,
-		})
-	end
-	for i, room in ipairs(data.rooms) do
-		local nextTier = Config.RoomTiers[room.tier + 1]
-		if nextTier then
-			table.insert(notes, {
-				key = "up:" .. i,
-				kind = "upgrade",
-				emoji = "⬆",
-				title = "Upgrade Room " .. i,
-				text = nextTier.name .. " • " .. nextTier.beds .. " beds",
-				cost = Config.RoomUpgradeCost(i, room.tier + 1),
-			})
-		end
-	end
-	for _, f in ipairs(Config.Facilities) do
-		if not data.facilities[f.id] then
-			table.insert(notes, {
-				key = "fac:" .. f.id,
-				kind = "facility",
-				emoji = f.emoji,
-				title = "Build the " .. f.name,
-				text = f.text .. (newFloor and " • opens a new floor" or ""),
-				cost = f.cost,
-				newFloor = newFloor,
-			})
-		end
-	end
-	table.sort(notes, function(a, b)
-		if a.cost ~= b.cost then
-			return a.cost < b.cost
-		end
-		return a.key < b.key
-	end)
-	return notes
 end
 
 return House

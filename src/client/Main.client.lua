@@ -273,6 +273,13 @@ local function roomOf(uid)
 	return nil
 end
 
+local function showRoom(index)
+	panelState.room = index
+	local room = State.data and State.data.rooms[index]
+	panelState.picking = room and #room.occupants < Config.Beds(room)
+	openPanel("rooms")
+end
+
 local function studentCard(parent, uid, s, extra)
 	local def = Config.StudentById[s.id]
 	local rarity = Config.Rarities[def.rarity]
@@ -494,9 +501,10 @@ local function renderRoom(index)
 		return Render.rooms()
 	end
 	local tier = Config.RoomTiers[room.tier]
+	local beds = Config.Beds(room)
 	local stats = SchoolMath.room(d, index, room.occupants, State.mult)
 	local decor = tier.decor + House.roomDecor(d, index)
-	panelTitle.Text = string.format("🛏 Room %d • %s", index, tier.name)
+	panelTitle.Text = string.format("🛏 Room %d • %s%s", index, room.size == 2 and "Big " or "", tier.name)
 	resetLayout("list")
 	UI.button(toolbar, "← All rooms", C.card, function()
 		panelState.room = nil
@@ -507,15 +515,15 @@ local function renderRoom(index)
 		openPanel("design")
 	end, { Size = UDim2.fromOffset(140, 40) })
 	if Config.RoomTiers[room.tier + 1] then
-		UI.text(toolbar, "⬆ Upgrades are pinned on the storyboard in your room", 14, C.sub, { Size = UDim2.fromOffset(240, 40) })
+		UI.text(toolbar, "⬆ Upgrade or expand it on the floor plans board in your room", 14, C.sub, { Size = UDim2.fromOffset(240, 40) })
 	end
 
-	UI.text(scroll, string.format("%s Satisfaction <b>%d%%</b>   💰 <b>$%s/s</b>   🛏 %d/%d beds   🎀 decor +%d", SchoolMath.moodEmoji(stats.satisfaction), math.floor(stats.satisfaction), fmt(stats.income), #room.occupants, tier.beds, decor), 18, C.text, { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26) })
+	UI.text(scroll, string.format("%s Satisfaction <b>%d%%</b>   💰 <b>$%s/s</b>   🛏 %d/%d beds   🎀 decor +%d", SchoolMath.moodEmoji(stats.satisfaction), math.floor(stats.satisfaction), fmt(stats.income), #room.occupants, beds, decor), 18, C.text, { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26) })
 
 	-- beds
 	local bedRow = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 2, Parent = scroll })
 	UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(160, 195), CellPadding = UDim2.fromOffset(10, 10), SortOrder = Enum.SortOrder.LayoutOrder, Parent = bedRow })
-	for b = 1, tier.beds do
+	for b = 1, beds do
 		local uid = room.occupants[b]
 		if uid and d.students[uid] then
 			local card = studentCard(bedRow, uid, d.students[uid], function(f)
@@ -554,7 +562,7 @@ local function renderRoom(index)
 	end
 
 	-- picker
-	if panelState.picking and #room.occupants < tier.beds then
+	if panelState.picking and #room.occupants < beds then
 		UI.text(scroll, "<b>Pick a roommate</b>  (sorted by how much this room would earn)", 18, C.gold, { LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 26) })
 		local options = {}
 		for uid, s in pairs(d.students) do
@@ -603,7 +611,7 @@ function Render.rooms()
 	UI.button(toolbar, "⚡ Auto-Arrange", C.purple, function()
 		result(call("autoArrange"), "Students rearranged for max income!")
 	end, { Size = UDim2.fromOffset(170, 40) })
-	UI.text(toolbar, "🔨 New rooms are pinned on the storyboard in your room", 14, C.sub, { Size = UDim2.fromOffset(260, 40) })
+	UI.text(toolbar, "🏗 Build new rooms on the floor plans board in your room", 14, C.sub, { Size = UDim2.fromOffset(260, 40) })
 	for i, room in ipairs(d.rooms) do
 		local tier = Config.RoomTiers[room.tier]
 		local stats = SchoolMath.room(d, i, room.occupants, State.mult)
@@ -619,15 +627,13 @@ function Render.rooms()
 				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:ToHex(), Config.Personalities[def.personality].emoji, def.name))
 			end
 		end
-		for _ = #room.occupants + 1, tier.beds do
+		for _ = #room.occupants + 1, Config.Beds(room) do
 			table.insert(names, "🛏 empty")
 		end
 		UI.text(f, table.concat(names, "   "), 14, C.sub, { Position = UDim2.fromOffset(0, 28), Size = UDim2.new(0.72, 0, 0, 28) })
 		UI.text(f, #room.occupants > 0 and string.format("%s %d%%\n$%s/s", SchoolMath.moodEmoji(stats.satisfaction), math.floor(stats.satisfaction), fmt(stats.income)) or "empty", 16, C.green, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -110, 0, 4), Size = UDim2.fromOffset(110, 48), TextXAlignment = Enum.TextXAlignment.Right })
 		UI.button(f, "Open", C.blue, function()
-			panelState.room = i
-			panelState.picking = #room.occupants < tier.beds
-			openPanel("rooms")
+			showRoom(i)
 		end, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(90, 40) })
 	end
 end
@@ -703,34 +709,231 @@ function Render.students()
 	end
 end
 
--- the storyboard on the wall of your room: every build is a sticky note
-function Render.storyboard()
-	local d = State.data
-	panelTitle.Text = "📌 School Plans"
-	resetLayout("grid", UDim2.fromOffset(180, 170))
-	UI.text(toolbar, string.format("🏠 %d dorm rooms on %d floors (max %d rooms)", #d.rooms, House.floorCount(d), Config.MaxRooms), 16, C.sub, { Size = UDim2.fromOffset(420, 40) })
-	local notes = House.notes(d)
-	for i, n in ipairs(notes) do
-		local paper = House.NoteColors[n.kind]
-		local f = UI.card(scroll, { LayoutOrder = i, BackgroundColor3 = paper })
-		f.Rotation = ((i * 37) % 7 - 3) * 0.6
-		local highlight = panelState.note == n.key
-		UI.stroke(f, highlight and C.red or Color3.fromRGB(120, 100, 60), highlight and 4 or 1)
-		UI.pad(f, 10)
-		local ink = Color3.fromRGB(50, 40, 40)
-		UI.text(f, "📍", 18, C.text, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, -14), Size = UDim2.fromOffset(24, 24), TextXAlignment = Enum.TextXAlignment.Center })
-		UI.text(f, n.emoji .. " " .. n.title, 18, ink, { Position = UDim2.fromOffset(0, 6), Size = UDim2.new(1, 0, 0, 44), TextStrokeTransparency = 1 })
-		UI.text(f, n.text, 13, Color3.fromRGB(90, 80, 80), { Position = UDim2.fromOffset(0, 52), Size = UDim2.new(1, 0, 0, 40) })
-		local afford = d.cash >= n.cost
-		smallButton(f, "Do it! $" .. fmt(n.cost), afford and C.green or Color3.fromRGB(130, 130, 140), function()
-			local res = call("note", { key = n.key })
-			if result(res, (n.newFloor and "🏗 A whole new floor! " or "✅ ") .. n.title .. " done!") then
-				panelState.note = nil
-			end
-		end)
+-- Floor plans board: pick a cell on a floor, then build / upgrade / expand
+local GRAY = Color3.fromRGB(110, 110, 120)
+local CELL_COLORS = {
+	me = Color3.fromRGB(200, 160, 60),
+	common = Color3.fromRGB(70, 160, 110),
+	dorm = Color3.fromRGB(70, 120, 200),
+	facility = Color3.fromRGB(190, 90, 140),
+}
+
+local function cellLabel(p)
+	if p.kind == "me" then
+		return "⭐ My Room"
+	elseif p.kind == "common" then
+		return "🛋 Common"
+	elseif p.kind == "dorm" then
+		local room = State.data.rooms[p.index]
+		return string.format("🛏 Room %d\n%d beds", p.index, room and Config.Beds(room) or 0)
 	end
-	if #notes == 0 then
-		UI.text(scroll, "🎉 Everything is built. You run the fanciest house in town!", 18, C.gold)
+	local f = Config.FacilityById[p.id]
+	return f.emoji .. " " .. f.name
+end
+
+local function actionButton(parent, text, cost, order, onClick)
+	local afford = not cost or State.data.cash >= cost
+	local label = cost and (text .. "  $" .. fmt(cost)) or text
+	return UI.button(parent, label, afford and C.green or GRAY, onClick, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = order, TextWrapped = true })
+end
+
+function Render.layout()
+	local d = State.data
+	local floors = House.floorCount(d)
+	local floor = math.clamp(panelState.floor or 0, 0, floors - 1)
+	panelState.floor = floor
+	panelTitle.Text = "🏗 Floor Plans"
+	resetLayout("list")
+	for f = 0, floors - 1 do
+		UI.button(toolbar, "Floor " .. (f + 1), f == floor and C.purple or C.card, function()
+			panelState.floor = f
+			panelState.cell = nil
+			openPanel("layout")
+		end, { Size = UDim2.fromOffset(90, 40), TextSize = 16 })
+	end
+	if floors < Config.MaxFloors then
+		local cost = Config.FloorCost(floors + 1)
+		UI.button(toolbar, "🏗 Floor " .. (floors + 1) .. " $" .. fmt(cost), d.cash >= cost and C.green or GRAY, function()
+			if result(call("buyFloor"), "🏗 Floor " .. (floors + 1) .. " is ready! Go up the stairs.") then
+				panelState.floor = floors
+				panelState.cell = nil
+			end
+		end, { Size = UDim2.fromOffset(170, 40), TextSize = 15 })
+	end
+
+	local body = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 430), LayoutOrder = 1, Parent = scroll })
+	-- the map: front door at the bottom, like looking down from above
+	local map = UI.card(body, { Size = UDim2.fromOffset(290, 430), BackgroundColor3 = C.bg })
+	local grid = House.grid(d)
+	local CW, CH, GAP = 115, 58, 6
+	UI.new("Frame", { BackgroundColor3 = Color3.fromRGB(90, 80, 70), Position = UDim2.fromOffset(135, 8), Size = UDim2.fromOffset(20, House.Rows * (CH + GAP) - GAP), Parent = map })
+	UI.text(map, "🚪 front door", 14, C.sub, { Position = UDim2.fromOffset(0, 400), Size = UDim2.new(1, 0, 0, 22), TextXAlignment = Enum.TextXAlignment.Center })
+	local sel = panelState.cell
+	for _, side in ipairs({ -1, 1 }) do
+		local x = side == -1 and 14 or 161
+		for row = 0, House.Rows - 1 do
+			local p = grid[floor][side][row]
+			local y = 8 + (House.Rows - 1 - row) * (CH + GAP)
+			if not p or p.row == row then
+				local size = p and p.size or 1
+				local h = CH * size + GAP * (size - 1)
+				local selected = sel and sel.floor == floor and sel.side == side and (sel.row == row)
+				local b = UI.button(map, p and cellLabel(p) or "＋", p and CELL_COLORS[p.kind] or Color3.fromRGB(70, 66, 100), function()
+					panelState.cell = { floor = floor, side = side, row = row }
+					openPanel("layout")
+				end, { Position = UDim2.fromOffset(x, y - (size - 1) * (CH + GAP)), Size = UDim2.fromOffset(CW, h), TextSize = 14, TextWrapped = true })
+				local stroke = b:FindFirstChildOfClass("UIStroke")
+				stroke.Color = selected and C.gold or Color3.new(0, 0, 0)
+				stroke.Thickness = selected and 4 or 2
+				stroke.Transparency = 0
+			end
+		end
+	end
+
+	-- what you can do with the selected cell
+	local pane = UI.new("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(304, 0), Size = UDim2.new(1, -304, 1, 0), Parent = body })
+	local actions = UI.new("ScrollingFrame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 6, BorderSizePixel = 0, Parent = pane })
+	UI.list(actions, 6)
+	if not sel or sel.floor ~= floor then
+		UI.text(actions, string.format("Tap a cell on the map.\n\n<b>%d</b> of %d dorm rooms built • <b>%d</b> empty cells in the house.\n\nBig rooms take two cells: +%d beds and +%d 🎀 decor.", #d.rooms, Config.MaxRooms, House.freeCells(d), Config.BigRoomBeds, Config.BigRoomDecor), 16, C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+		return
+	end
+	local p = grid[sel.floor][sel.side][sel.row]
+	local order = 0
+	local function nextOrder()
+		order += 1
+		return order
+	end
+	if not p then
+		UI.text(actions, "<b>Empty cell</b>  " .. House.cellName(sel), 16, C.gold, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
+		local index = #d.rooms + 1
+		if index <= Config.MaxRooms then
+			actionButton(actions, "🛏 New dorm room (2 beds)", Config.RoomUnlockCost(index), nextOrder(), function()
+				result(call("build", { kind = "dorm", floor = sel.floor, side = sel.side, row = sel.row }), "🛏 Room " .. index .. " built!")
+			end)
+			local bigRow = House.isFree(d, sel.floor, sel.side, sel.row, 2) and sel.row or (House.isFree(d, sel.floor, sel.side, sel.row - 1, 2) and sel.row - 1)
+			if bigRow then
+				actionButton(actions, string.format("🛏🛏 Big dorm room (%d beds, 2 cells)", Config.RoomTiers[1].beds + Config.BigRoomBeds), Config.RoomUnlockCost(index) + Config.ExpandCost(index), nextOrder(), function()
+					result(call("build", { kind = "dorm", big = true, floor = sel.floor, side = sel.side, row = bigRow }), "🛏 Big Room " .. index .. " built!")
+				end)
+			end
+		end
+		for _, f in ipairs(Config.Facilities) do
+			if not d.facilities[f.id] then
+				actionButton(actions, f.emoji .. " " .. f.name .. " (" .. f.text .. ")", f.cost, nextOrder(), function()
+					result(call("build", { kind = "facility", id = f.id, floor = sel.floor, side = sel.side, row = sel.row }), f.emoji .. " " .. f.name .. " built!")
+				end)
+			end
+		end
+	elseif p.kind == "dorm" then
+		local i = p.index
+		local room = d.rooms[i]
+		local tier = Config.RoomTiers[room.tier]
+		UI.text(actions, string.format("<b>Room %d</b> • %s%s • %d/%d beds", i, room.size == 2 and "Big " or "", tier.name, #room.occupants, Config.Beds(room)), 17, C.gold, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
+		local nt = Config.RoomTiers[room.tier + 1]
+		if nt then
+			actionButton(actions, string.format("⬆ Upgrade to %s (%d beds, +%d decor)", nt.name, nt.beds, nt.decor), Config.RoomUpgradeCost(i, room.tier + 1), nextOrder(), function()
+				result(call("upgradeRoom", { room = i }), "⬆ Room " .. i .. " is now a " .. nt.name .. "!")
+			end)
+		end
+		if room.size ~= 2 then
+			if House.expandRow(d, i) then
+				actionButton(actions, string.format("↔ Expand into the next cell (+%d beds, +%d decor)", Config.BigRoomBeds, Config.BigRoomDecor), Config.ExpandCost(i), nextOrder(), function()
+					result(call("expandRoom", { room = i }), "↔ Room " .. i .. " is bigger now!")
+				end)
+			else
+				UI.text(actions, "↔ To expand, the cell in front of or behind this room must be empty.", 14, C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
+			end
+		end
+		UI.button(actions, "👥 Move students in or out", C.blue, function()
+			showRoom(i)
+		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = nextOrder() })
+		UI.button(actions, "🎨 Decorate this room", Color3.fromRGB(240, 140, 60), function()
+			panelState.area = p.key
+			openPanel("design")
+		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = nextOrder() })
+	else
+		local text
+		if p.kind == "me" then
+			text = "<b>⭐ Your room</b>\nYour bed, desk, wardrobe and the three boards live here."
+		elseif p.kind == "common" then
+			text = "<b>🛋 Common room</b>\nStudents hang out here between classes."
+		else
+			local f = Config.FacilityById[p.id]
+			text = string.format("<b>%s %s</b>\n%s", f.emoji, f.name, f.text)
+		end
+		UI.text(actions, text, 16, C.text, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = nextOrder() })
+		UI.button(actions, "🎨 Decorate", Color3.fromRGB(240, 140, 60), function()
+			panelState.area = p.key
+			openPanel("design")
+		end, { Size = UDim2.new(1, 0, 0, 40), TextSize = 15, LayoutOrder = nextOrder() })
+	end
+end
+
+-- Happiness board: every room, unhappiest first, with why each student feels that way
+local PART_NAMES = { { "base", "base" }, { "decor", "decor" }, { "facilities", "facilities" }, { "chemistry", "roommates" }, { "friends", "mood buffs" }, { "trait", "trait" } }
+
+function Render.satisfaction()
+	local d = State.data
+	panelTitle.Text = string.format("😊 Happiness  %s %d%%", SchoolMath.moodEmoji(State.satisfaction or 0), math.floor(State.satisfaction or 0))
+	resetLayout("list")
+	UI.text(toolbar, "100% doubles a student's income. Fix the red rooms first!", 15, C.sub, { Size = UDim2.new(1, 0, 1, 0) })
+	local list = {}
+	for i, room in ipairs(d.rooms) do
+		if #room.occupants > 0 then
+			table.insert(list, { i = i, room = room, stats = SchoolMath.room(d, i, room.occupants, State.mult) })
+		end
+	end
+	table.sort(list, function(a, b)
+		return a.stats.satisfaction < b.stats.satisfaction
+	end)
+	for k, e in ipairs(list) do
+		local sat = e.stats.satisfaction
+		local tone = Color3.fromRGB(240, 80, 80):Lerp(Color3.fromRGB(80, 210, 110), math.clamp(sat / 100, 0, 1))
+		local card = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = k })
+		UI.stroke(card, tone, 3)
+		UI.pad(card, 10)
+		UI.list(card, 4)
+		UI.text(card, string.format("%s <b>Room %d</b>  %d%%  •  $%s/s", SchoolMath.moodEmoji(sat), e.i, math.floor(sat), fmt(e.stats.income)), 19, C.text, { LayoutOrder = 0 })
+		for j, uid in ipairs(e.room.occupants) do
+			local s = d.students[uid]
+			local st = e.stats.students[uid]
+			if s and st then
+				local def = Config.StudentById[s.id]
+				local bits = {}
+				for _, pn in ipairs(PART_NAMES) do
+					local v = st.parts[pn[1]] or 0
+					if v ~= 0 or pn[1] == "base" then
+						local c = v > 0 and "#7ee08a" or v < 0 and "#ff8080" or "#cccccc"
+						table.insert(bits, string.format('<font color="%s">%s %s%d</font>', c, pn[2], (v > 0 and pn[1] ~= "base") and "+" or "", v))
+					end
+				end
+				UI.text(card, string.format("%s %s <b>%d%%</b>   %s", Config.Personalities[def.personality].emoji, def.name, math.floor(st.sat), table.concat(bits, "  ")), 14, C.sub, { LayoutOrder = j, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+			end
+		end
+		-- tips
+		local tips = {}
+		for a = 1, #e.room.occupants do
+			for b = a + 1, #e.room.occupants do
+				local sa, sb = d.students[e.room.occupants[a]], d.students[e.room.occupants[b]]
+				if sa and sb then
+					local da, db = Config.StudentById[sa.id], Config.StudentById[sb.id]
+					local c = SchoolMath.pairChemistry(da, db)
+					if c < 0 then
+						table.insert(tips, string.format("%s %s and %s don't get along", SchoolMath.chemEmoji(c), da.name, db.name))
+					end
+				end
+			end
+		end
+		if #tips > 0 then
+			UI.text(card, "💡 " .. table.concat(tips, " • "), 14, C.gold, { LayoutOrder = 50, AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) })
+		end
+		UI.button(card, "Open Room " .. e.i, C.blue, function()
+			showRoom(e.i)
+		end, { Size = UDim2.fromOffset(150, 34), TextSize = 15, LayoutOrder = 60 })
+	end
+	if #list == 0 then
+		UI.text(scroll, "No one has moved in yet. Open the Students board and give them beds!", 18, C.sub)
 	end
 end
 
@@ -916,8 +1119,8 @@ openPanel = function(id)
 		if id ~= "rooms" then
 			panelState.room = nil
 		end
-		if id ~= "storyboard" then
-			panelState.note = nil
+		if id ~= "layout" then
+			panelState.cell = nil
 		end
 		panelState.expel = nil
 		scroll.CanvasPosition = Vector2.zero
@@ -983,7 +1186,7 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 				"🛏 Walk out into the hallway, go to a dorm door and press <b>E</b> (or open <b>Rooms</b>) to move your 2 students in. Housed students earn cash every second.",
 				"💞 Roommates have <b>chemistry</b>! Nerds + Gamers are besties, Royals hate Rebels. Happy rooms earn up to 2x more.",
 				"🎓 Use <b>Enroll</b> to recruit new students. Find Legendary & Mythic ones and shiny ✨ variants!",
-				"📌 Your <b>storyboard</b> (the corkboard on your wall) holds every plan: new rooms, upgrades, a Gym, a Pool... Walk up to it and press <b>E</b>.",
+				"📋 Your room has 3 boards on the wall. <b>Floor plans</b>: choose where new rooms and facilities go, expand rooms, add floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. Walk up and press <b>E</b>.",
 				"🎨 Use <b>Build</b> to pick materials for walls, floors and the roof, and to furnish your room. Nicer dorms = happier students!",
 			}
 			local box = UI.card(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -20), Size = UDim2.fromOffset(520, 110), BackgroundColor3 = C.bg })
@@ -1103,11 +1306,8 @@ local function hookClick(tag, fn)
 end
 
 local function openRoom(index)
-	panelState.room = index
-	local room = State.data and State.data.rooms[index]
-	panelState.picking = room and #room.occupants < Config.RoomTiers[room.tier].beds
 	SFX.click()
-	openPanel("rooms")
+	showRoom(index)
 end
 
 hookClick("RoomClick", function(plate)
@@ -1116,13 +1316,18 @@ hookClick("RoomClick", function(plate)
 	end
 end)
 
-hookClick("NoteClick", function(note)
-	if note:GetAttribute("OwnerUserId") ~= player.UserId then
-		return
-	end
-	panelState.note = note:GetAttribute("NoteKey")
+local function openBoard(id)
 	SFX.click()
-	openPanel("storyboard")
+	if id == "rooms" then
+		panelState.room = nil
+	end
+	openPanel(id)
+end
+
+hookClick("BoardClick", function(board)
+	if board:GetAttribute("OwnerUserId") == player.UserId then
+		openBoard(board:GetAttribute("Board"))
+	end
 end)
 
 -- prompts only work in your own house
@@ -1146,10 +1351,8 @@ hookPrompt("RoomPrompt", function(pp)
 	openRoom(pp:GetAttribute("RoomIndex"))
 end)
 
-hookPrompt("StoryboardPrompt", function()
-	panelState.note = nil
-	SFX.click()
-	openPanel("storyboard")
+hookPrompt("BoardPrompt", function(pp)
+	openBoard(pp:GetAttribute("Board"))
 end)
 
 local function hookLike(prompt)

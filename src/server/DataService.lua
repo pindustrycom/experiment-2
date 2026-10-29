@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Config = require(ReplicatedStorage.Shared.Config)
+local House = require(ReplicatedStorage.Shared.House)
 
 local DataService = {}
 DataService.Profiles = {} -- [player] = data
@@ -43,13 +44,16 @@ function DataService.Default()
 		lastOnline = 0,
 		discovered = {}, -- [studentId] = true (collection book)
 		tutorialDone = false,
-		order = {}, -- build order of house slots: "r<i>" dorms, "fac:<id>" facilities
+		floors = 1, -- floors unlocked
+		layout = {}, -- [roomKey] = { floor, side, row } (see shared/House.lua)
 		styles = {}, -- [area] = { wall = id, floor = id, roof = id } (build mode)
 		furniture = {}, -- [furnitureId] = true (shown) / false (owned, hidden)
 	}
+	data.layout.me = table.clone(House.Fixed.me)
+	data.layout.common = table.clone(House.Fixed.common)
 	for i = 1, Config.StartingRooms do
-		table.insert(data.rooms, { tier = 1, occupants = {} })
-		table.insert(data.order, "r" .. i)
+		table.insert(data.rooms, { tier = 1, size = 1, occupants = {} })
+		data.layout["r" .. i] = table.clone(House.StartCells[i])
 	end
 	-- Two free starter students so the loop makes sense immediately.
 	for _, id in ipairs({ "tim", "pete" }) do
@@ -75,36 +79,59 @@ local function reconcile(data)
 	end
 	for _, room in ipairs(data.rooms) do
 		room.tier = math.clamp(room.tier or 1, 1, #Config.RoomTiers)
+		room.size = (room.size == 2) and 2 or 1
 		local kept = {}
 		for _, uid in ipairs(room.occupants or {}) do
-			if data.students[uid] and #kept < Config.RoomTiers[room.tier].beds then
+			if data.students[uid] and #kept < Config.Beds(room) then
 				table.insert(kept, uid)
 			end
 		end
 		room.occupants = kept
 	end
-	-- every room and facility needs exactly one slot in the house
-	local seen, order = {}, {}
-	for _, key in ipairs(data.order) do
-		local i = tonumber(string.match(key, "^r(%d+)$") or "")
-		local fid = string.match(key, "^fac:(.+)$")
-		local valid = (i and data.rooms[i]) or (fid and data.facilities[fid])
-		if valid and not seen[key] then
-			seen[key] = true
-			table.insert(order, key)
-		end
-	end
+	-- every room and facility needs one valid, non-overlapping place in the
+	-- house (older saves had no layout: place everything front to back)
+	data.order = nil
+	data.floors = math.clamp(math.floor(data.floors or 1), 1, Config.MaxFloors)
+	local old = data.layout or {}
+	data.layout = { me = table.clone(House.Fixed.me), common = table.clone(House.Fixed.common) }
+	local wanted = {}
 	for i in ipairs(data.rooms) do
-		if not seen["r" .. i] then
-			table.insert(order, "r" .. i)
-		end
+		table.insert(wanted, "r" .. i)
 	end
 	for _, f in ipairs(Config.Facilities) do
-		if data.facilities[f.id] and not seen["fac:" .. f.id] then
-			table.insert(order, "fac:" .. f.id)
+		if data.facilities[f.id] then
+			table.insert(wanted, "fac:" .. f.id)
 		end
 	end
-	data.order = order
+	local homeless = {}
+	for _, key in ipairs(wanted) do
+		local cell = old[key]
+		local size = House.size(data, key)
+		if typeof(cell) == "table" and House.isFree(data, cell.floor, cell.side, cell.row, size) then
+			data.layout[key] = { floor = cell.floor, side = cell.side, row = cell.row }
+		else
+			table.insert(homeless, key)
+		end
+	end
+	for _, key in ipairs(homeless) do
+		local size = House.size(data, key)
+		local f, side, row = House.firstFree(data, size)
+		while not f and data.floors < Config.MaxFloors do
+			data.floors += 1
+			f, side, row = House.firstFree(data, size)
+		end
+		if not f and size == 2 then
+			-- no room left for a big room: shrink it
+			local i = tonumber(string.match(key, "^r(%d+)$"))
+			data.rooms[i].size = 1
+			f, side, row = House.firstFree(data, 1)
+		end
+		if f then
+			data.layout[key] = { floor = f, side = side, row = row }
+		else
+			warn("[BST] no space in the house for", key)
+		end
+	end
 	return data
 end
 

@@ -220,7 +220,7 @@ local function autoArrange(player, data)
 	end
 	local beds = 0
 	for _, room in ipairs(data.rooms) do
-		beds += Config.RoomTiers[room.tier].beds
+		beds += Config.Beds(room)
 	end
 	local list = {}
 	for uid, s in pairs(data.students) do
@@ -243,7 +243,7 @@ local function autoArrange(player, data)
 		local uid = list[n].uid
 		local bestRoom, bestGain = nil, -math.huge
 		for _, room in ipairs(data.rooms) do
-			if #room.occupants < Config.RoomTiers[room.tier].beds then
+			if #room.occupants < Config.Beds(room) then
 				local before = roomIncome(room)
 				table.insert(room.occupants, uid)
 				local gain = roomIncome(room) - before
@@ -327,8 +327,8 @@ function Actions.assign(player, data, args)
 	if current == roomIndex then
 		return { ok = true }
 	end
-	if #room.occupants >= Config.RoomTiers[room.tier].beds then
-		return { ok = false, err = "That room is full. Upgrade it for more beds!" }
+	if #room.occupants >= Config.Beds(room) then
+		return { ok = false, err = "That room is full. Upgrade or expand it for more beds!" }
 	end
 	removeFromRoom(data, uid)
 	table.insert(room.occupants, uid)
@@ -361,23 +361,71 @@ function Actions.expel(player, data, args)
 	return { ok = true, value = value }
 end
 
-local function announceFloor(player, data)
-	if House.nextIsNewFloor(data) then
-		AnnounceEv:FireAllClients({ player = player.DisplayName, floor = House.floorCount(data) + 1 })
+-- Floor layout board: build a dorm or facility in a chosen cell
+function Actions.build(player, data, args)
+	local floor, side, row = args.floor, args.side, args.row
+	if args.kind == "dorm" then
+		local index = #data.rooms + 1
+		if index > Config.MaxRooms then
+			return { ok = false, err = "You have the most dorm rooms a house can hold!" }
+		end
+		local size = args.big == true and 2 or 1
+		if not House.isFree(data, floor, side, row, size) then
+			return { ok = false, err = size == 2 and "A big room needs this cell and the one behind it free." or "That spot is taken." }
+		end
+		local cost = Config.RoomUnlockCost(index) + (size == 2 and Config.ExpandCost(index) or 0)
+		if not spend(data, cost) then
+			return { ok = false, err = "Not enough cash!" }
+		end
+		table.insert(data.rooms, { tier = 1, size = size, occupants = {} })
+		data.layout["r" .. index] = { floor = floor, side = side, row = row }
+		return { ok = true }
+	elseif args.kind == "facility" then
+		local f = typeof(args.id) == "string" and Config.FacilityById[args.id]
+		if not f or data.facilities[f.id] then
+			return { ok = false }
+		end
+		if not House.isFree(data, floor, side, row, 1) then
+			return { ok = false, err = "That spot is taken." }
+		end
+		if not spend(data, f.cost) then
+			return { ok = false, err = "Not enough cash!" }
+		end
+		data.facilities[f.id] = true
+		data.layout["fac:" .. f.id] = { floor = floor, side = side, row = row }
+		return { ok = true }
 	end
+	return { ok = false }
 end
 
-function Actions.buyRoom(player, data)
-	local index = #data.rooms + 1
-	if index > Config.MaxRooms then
-		return { ok = false, err = "Your house is at max size!" }
+function Actions.expandRoom(player, data, args)
+	local index = typeof(args.room) == "number" and args.room
+	local room = index and data.rooms[index]
+	if not room then
+		return { ok = false }
 	end
-	if not spend(data, Config.RoomUnlockCost(index)) then
+	local newRow = House.expandRow(data, index)
+	if not newRow then
+		return { ok = false, err = "There's no empty cell next to this room." }
+	end
+	if not spend(data, Config.ExpandCost(index)) then
 		return { ok = false, err = "Not enough cash!" }
 	end
-	announceFloor(player, data)
-	table.insert(data.rooms, { tier = 1, occupants = {} })
-	table.insert(data.order, "r" .. index)
+	room.size = 2
+	data.layout["r" .. index].row = newRow
+	return { ok = true }
+end
+
+function Actions.buyFloor(player, data)
+	local n = House.floorCount(data) + 1
+	if n > Config.MaxFloors then
+		return { ok = false, err = "Your house is as tall as it gets!" }
+	end
+	if not spend(data, Config.FloorCost(n)) then
+		return { ok = false, err = "Not enough cash!" }
+	end
+	data.floors = n
+	AnnounceEv:FireAllClients({ player = player.DisplayName, floor = n })
 	return { ok = true }
 end
 
@@ -395,40 +443,6 @@ function Actions.upgradeRoom(player, data, args)
 	end
 	room.tier += 1
 	return { ok = true }
-end
-
-function Actions.buyFacility(player, data, args)
-	local f = typeof(args.id) == "string" and Config.FacilityById[args.id]
-	if not f or data.facilities[f.id] then
-		return { ok = false }
-	end
-	if not spend(data, f.cost) then
-		return { ok = false, err = "Not enough cash!" }
-	end
-	announceFloor(player, data)
-	data.facilities[f.id] = true
-	table.insert(data.order, "fac:" .. f.id)
-	return { ok = true }
-end
-
--- a storyboard note: "room", "up:<room>", "fac:<facility>"
-function Actions.note(player, data, args)
-	local key = args.key
-	if typeof(key) ~= "string" then
-		return { ok = false }
-	end
-	if key == "room" then
-		return Actions.buyRoom(player, data)
-	end
-	local up = tonumber(string.match(key, "^up:(%d+)$") or "")
-	if up then
-		return Actions.upgradeRoom(player, data, { room = up })
-	end
-	local fid = string.match(key, "^fac:(.+)$")
-	if fid then
-		return Actions.buyFacility(player, data, { id = fid })
-	end
-	return { ok = false }
 end
 
 -- build mode: paint an area's walls / floor / roof
