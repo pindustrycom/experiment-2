@@ -543,9 +543,33 @@ local LOOK_ACC = {
 	Prankster = { "propeller" },
 }
 
+-- second billboard line: tags, rarity, glow-up level and mutation
+local function rarityText(def, student)
+	local mut = student.mut and Config.MutationById[student.mut]
+	return (mut and (mut.emoji .. " ") or "") .. Config.TagEmoji(def) .. " " .. def.rarity .. ((student.lv or 1) > 1 and (" • Lv " .. student.lv) or "")
+end
+
 local function finishStudent(m, uid, student, head, root)
 	local def = Config.StudentById[student.id]
 	local rarity = Config.Rarities[def.rarity]
+	local mut = student.mut and Config.MutationById[student.mut]
+	if mut then
+		local glow = Instance.new("ParticleEmitter")
+		glow.Name = "Mutation"
+		glow.Color = ColorSequence.new(mut.color)
+		glow.LightEmission = 0.8
+		glow.Size = NumberSequence.new(0.45, 0)
+		glow.Rate = 14
+		glow.Lifetime = NumberRange.new(0.8, 1.4)
+		glow.Speed = NumberRange.new(0.5, 1.5)
+		glow.SpreadAngle = Vector2.new(180, 180)
+		glow.Parent = root
+		local hl = Instance.new("PointLight")
+		hl.Color = mut.color
+		hl.Range = 8
+		hl.Brightness = 0.8
+		hl.Parent = head
+	end
 	if rarity.rank >= 5 then
 		local light = Instance.new("PointLight")
 		light.Color = rarity.color
@@ -569,7 +593,7 @@ local function finishStudent(m, uid, student, head, root)
 	end
 	local bb = billboard(head, UDim2.fromOffset(160, 44), Vector3.new(0, 2.2, 0), 60)
 	label(bb, (student.shiny and "✨" or "") .. (def.crew and "🌹 " or "") .. def.name, def.crew and Config.Tags.LaRose.color or Color3.new(1, 1, 1), UDim2.fromScale(1, 0.55))
-	local r = label(bb, Config.TagEmoji(def) .. " " .. def.rarity, rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
+	local r = label(bb, rarityText(def, student), mut and mut.color or rarity.color, UDim2.fromScale(1, 0.45), UDim2.fromScale(0, 0.55))
 	r.Name = "RarityLabel"
 	m:SetAttribute("StudentUid", uid)
 	m:SetAttribute("Tags", table.concat(def.tags, ","))
@@ -2356,7 +2380,7 @@ local function renderLive(plot, data, totals)
 					local m = students:FindFirstChild(uid)
 					local r = info.rect
 					local where = string.format("%d,%d,%d,%d,%d/%d,%d", r.floor, r.x, r.z, r.w, r.d, r.door.x, r.door.z)
-					if m and (m:GetAttribute("HomeKey") ~= info.key or m:GetAttribute("StudentId") ~= s.id or m:GetAttribute("Origin") ~= plot.cf or m:GetAttribute("HomeRect") ~= where) then
+					if m and (m:GetAttribute("HomeKey") ~= info.key or m:GetAttribute("StudentId") ~= s.id or m:GetAttribute("Mut") ~= (s.mut or "") or m:GetAttribute("Origin") ~= plot.cf or m:GetAttribute("HomeRect") ~= where) then
 						m:Destroy()
 						m = nil
 					end
@@ -2366,12 +2390,17 @@ local function renderLive(plot, data, totals)
 						m = PlotService.BuildStudentModel(uid, s, start)
 						m.Name = uid
 						m:SetAttribute("StudentId", s.id)
+						m:SetAttribute("Mut", s.mut or "")
 						m:SetAttribute("Origin", plot.cf)
 						m:SetAttribute("HomeRect", where)
 						setStudentAttrs(m, plot, info, satv)
 						m.Parent = students
 					else
 						m:SetAttribute("Sat", satv)
+						local rl = m:FindFirstChild("RarityLabel", true)
+						if rl then
+							rl.Text = rarityText(Config.StudentById[s.id], s)
+						end
 					end
 					keep[uid] = true
 				end

@@ -168,6 +168,11 @@ Config.Students = {
 	-- Mythic
 	{ id = "tess", name = "Time Traveler Tess", rarity = "Mythic", gender = "F", look = "Nerd", tags = { "Nerd", "Carefree", "Charismatic" }, trait = { kind = "Gold", value = 3, text = "Room income x3" } },
 	{ id = "dragon", name = "Dragon Exchange Student", rarity = "Mythic", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Chad" }, trait = { kind = "Mood", value = 30, text = "+30 mood to roommates" } },
+	-- Event students: only on the Applicants board while their event is on
+	{ id = "vee", name = "Valedictorian Vee", rarity = "Legendary", event = "exam", gender = "F", look = "Nerd", acc = { "glasses" }, tags = { "Nerd", "Charismatic" }, trait = { kind = "Gold", value = 1.6, text = "Room income x1.6" } },
+	{ id = "preston", name = "Prom King Preston", rarity = "Legendary", event = "prom", gender = "M", look = "Royal", acc = { "crown" }, tags = { "Chad", "RichKid" }, trait = { kind = "Mood", value = 15, text = "+15 mood to roommates" } },
+	{ id = "skye", name = "Stormchaser Skye", rarity = "Epic", event = "storm", gender = "F", look = "Rebel", acc = { "cap" }, tags = { "Carefree", "Indie" }, trait = { kind = "Chill", value = 1, text = "Never has a bad vibe with anyone" } },
+	{ id = "dahlia", name = "Diva Dahlia", rarity = "Legendary", event = "talent", gender = "F", look = "Musician", acc = { "headset" }, tags = { "Musician", "Charismatic" }, trait = { kind = "Social", value = 10, text = "+10 mood per roommate" } },
 }
 Config.CrewBonus = { LaRose = 0.25 } -- +25% income for the whole house with the full crew
 Config.Crews = { LaRose = {} }
@@ -177,7 +182,9 @@ Config.StudentsByRarity = {}
 for _, s in ipairs(Config.Students) do
 	Config.StudentById[s.id] = s
 	Config.StudentsByRarity[s.rarity] = Config.StudentsByRarity[s.rarity] or {}
-	table.insert(Config.StudentsByRarity[s.rarity], s)
+	if not s.event then
+		table.insert(Config.StudentsByRarity[s.rarity], s)
+	end
 	if s.crew then
 		table.insert(Config.Crews[s.crew], s.id)
 	end
@@ -301,6 +308,80 @@ Config.PullCostGrowth = 1.05
 function Config.PullCost(banner, owned)
 	return math.floor(banner.cost * Config.PullCostGrowth ^ math.max(0, owned - 2))
 end
+
+---------------------------------------------------------------------------
+-- Applicants board: named students you hire directly. The stock is the same
+-- for everyone (it's seeded by the time) and restocks every few minutes;
+-- each applicant can be hired once per stock.
+---------------------------------------------------------------------------
+Config.RestockSeconds = 5 * 60
+Config.ApplicantSlots = 6
+Config.ApplicantWeights = { Common = 45, Uncommon = 30, Rare = 15, Epic = 7.5, Legendary = 2.2, Mythic = 0.3 }
+Config.ApplicantPrice = { Common = 250, Uncommon = 1000, Rare = 5000, Epic = 30000, Legendary = 350000, Mythic = 3000000 }
+Config.ApplicantShinyPrice = 3 -- shiny applicants cost 3x
+Config.LuckyHourSeconds = 3600 -- Robux: rarer applicants and more mutations for an hour
+Config.LuckyHourRare = 4 -- Epic+ applicant weights x4 while lucky
+Config.LuckyHourMutation = 2
+
+---------------------------------------------------------------------------
+-- Glow-ups: housed students level up over real time (offline too), and
+-- every level-up can mutate them. A student keeps their best mutation.
+---------------------------------------------------------------------------
+Config.GlowLevels = { 0, 300, 900, 2400, 5400, 10800, 21600, 43200, 86400, 172800 } -- seconds housed for Lv 1..10
+Config.GlowIncome = 0.15 -- +15% income per level above 1
+Config.GlowBoostSeconds = 3600 -- Robux "skip the wait": an hour of growing for everyone housed
+Config.Mutations = {
+	{ id = "Glowing", emoji = "🌟", mult = 1.5, chance = 0.08, color = Color3.fromRGB(255, 240, 150) },
+	{ id = "Golden", emoji = "🥇", mult = 2, chance = 0.03, color = Color3.fromRGB(255, 200, 40) },
+	{ id = "Stormy", emoji = "⛈", mult = 2.5, chance = 0.06, event = "storm", color = Color3.fromRGB(120, 160, 255) },
+	{ id = "Royalty", emoji = "👑", mult = 3, chance = 0.04, event = "prom", color = Color3.fromRGB(230, 120, 255) },
+	{ id = "Rainbow", emoji = "🌈", mult = 4, chance = 0.006, color = Color3.fromRGB(255, 120, 200) },
+}
+Config.MutationById = {}
+for _, m in ipairs(Config.Mutations) do
+	Config.MutationById[m.id] = m
+end
+
+function Config.GlowLevel(xp)
+	local lv = 1
+	for i, need in ipairs(Config.GlowLevels) do
+		if (xp or 0) >= need then
+			lv = i
+		end
+	end
+	return lv
+end
+
+---------------------------------------------------------------------------
+-- School events: one every hour for 20 minutes, the same time in every
+-- server. Boosted tags earn more, and each brings a limited applicant.
+---------------------------------------------------------------------------
+Config.EventCycle = 3600
+Config.EventLength = 20 * 60
+Config.Events = {
+	{ id = "exam", name = "Exam Week", emoji = "📝", text = "Nerds earn 2x. Valedictorian Vee is applying!", tags = { "Nerd" }, mult = 2, student = "vee" },
+	{ id = "prom", name = "Prom Night", emoji = "💃", text = "Chads and Charismatic students earn 2x. Glow-ups can turn 👑 Royalty. Prom King Preston is applying!", tags = { "Chad", "Charismatic" }, mult = 2, student = "preston" },
+	{ id = "storm", name = "Thunderstorm", emoji = "⛈", text = "Glow-ups mutate 3x more and can turn ⛈ Stormy. Stormchaser Skye is applying!", mutationLuck = 3, student = "skye" },
+	{ id = "talent", name = "Talent Show", emoji = "🎤", text = "Musicians, Artistic and Funny students earn 2x. Diva Dahlia is applying!", tags = { "Musician", "Artistic", "Funny" }, mult = 2, student = "dahlia" },
+}
+Config.EventById = {}
+for _, e in ipairs(Config.Events) do
+	Config.EventById[e.id] = e
+end
+
+-- the event running at time t (or nil), when it ends, and the next one
+function Config.EventAt(t)
+	local cycle = t // Config.EventCycle
+	local start = cycle * Config.EventCycle
+	local ev = Config.Events[cycle % #Config.Events + 1]
+	if t - start < Config.EventLength then
+		return ev, start + Config.EventLength, Config.Events[(cycle + 1) % #Config.Events + 1], start + Config.EventCycle
+	end
+	return nil, nil, Config.Events[(cycle + 1) % #Config.Events + 1], start + Config.EventCycle
+end
+
+-- trades and gifts between players in the same server
+Config.TradeMaxEach = 4
 
 Config.PityPulls = 75 -- guaranteed Legendary+ after this many pulls without one
 Config.DailyFreeBanner = "honors"
@@ -498,6 +579,9 @@ Config.Products = {
 	RoyalPull10 = 0, -- ten Royal Admissions
 	CashSmall = 0, -- 10 minutes of income (min 5,000)
 	DoubleOffline = 0, -- doubles welcome-back earnings
+	RestockNow = 0, -- a fresh Applicants stock just for you
+	LuckyHour = 0, -- an hour of rarer applicants and 2x mutation chance
+	GlowBoost = 0, -- skip the wait: an hour of glow-up for every housed student
 }
 
 return Config

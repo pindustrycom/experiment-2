@@ -98,6 +98,8 @@ local function pushState(player)
 		gamePasses = Config.GamePasses,
 		products = Config.Products,
 		dailyIn = math.max(0, data.lastDaily + Config.DailyCooldown - os.time()),
+		offers = s.offers,
+		now = os.time(),
 		plotIndex = s.plot and s.plot.index,
 	})
 end
@@ -140,6 +142,19 @@ local function removeFromRoom(data, uid)
 	local i, j = roomOf(data, uid)
 	if i then
 		table.remove(data.rooms[i].occupants, j)
+	end
+end
+
+-- take a student out of the house: rooms, friendships, mood buffs
+local function forget(data, uid)
+	removeFromRoom(data, uid)
+	data.students[uid] = nil
+	data.buffs[uid] = nil
+	for key in pairs(data.bonds) do
+		local x, y = string.match(key, "^(.-)|(.*)$")
+		if x == uid or y == uid then
+			data.bonds[key] = nil
+		end
 	end
 end
 
@@ -487,6 +502,267 @@ function Actions.daily(player, data)
 	return { ok = true, results = results }
 end
 
+---------------------------------------------------------------------------
+-- Applicants board: a shared stock that restocks every few minutes
+---------------------------------------------------------------------------
+local function stockWindow()
+	return os.time() // Config.RestockSeconds
+end
+
+local function applicantState(data)
+	local w = stockWindow()
+	if data.applicants.window ~= w then
+		data.applicants = { window = w, salt = 0, bought = {} }
+	end
+	return data.applicants
+end
+
+local function houseAllows(data, id)
+	return data.houseGender == "Mixed" or (data.houseGender == "Boys") == (Config.StudentById[id].gender == "M")
+end
+
+local function luckyNow(data)
+	return (data.luckUntil or 0) > os.time()
+end
+
+function Actions.hire(player, data, args)
+	local st = applicantState(data)
+	if args.window ~= st.window or args.salt ~= st.salt then
+		return { ok = false, err = "The applicants just changed! Take another look." }
+	end
+	local list = SchoolMath.applicants(st.window, st.salt, luckyNow(data), countStudents(data))
+	local slot = args.slot
+	local a = typeof(slot) == "number" and list[slot]
+	if not a then
+		return { ok = false }
+	end
+	if st.bought[tostring(slot)] then
+		return { ok = false, err = "Already hired! Wait for the next restock." }
+	end
+	if countStudents(data) >= Config.MaxStudents then
+		return { ok = false, err = "Your roster is full! Expel some students first." }
+	end
+	local def = Config.StudentById[a.id]
+	if not houseAllows(data, a.id) then
+		return { ok = false, err = "Your house rule doesn't allow " .. (def.gender == "M" and "boys" or "girls") .. " right now." }
+	end
+	if not spend(data, a.price) then
+		return { ok = false, err = "Not enough cash!" }
+	end
+	st.bought[tostring(slot)] = true
+	local uid = DataService.NewUid(data)
+	local isNew = not data.discovered[a.id]
+	data.students[uid] = { id = a.id, shiny = a.shiny }
+	data.discovered[a.id] = true
+	if Config.Rarities[def.rarity].rank >= 5 or (a.shiny and Config.Rarities[def.rarity].rank >= 4) then
+		AnnounceEv:FireAllClients({ player = player.DisplayName, student = def.name, rarity = def.rarity, shiny = a.shiny })
+	end
+	return { ok = true, results = { { uid = uid, id = a.id, shiny = a.shiny, new = isNew } } }
+end
+
+---------------------------------------------------------------------------
+-- Glow-ups: housed students level up over time and can mutate
+---------------------------------------------------------------------------
+local MUTATIONS_BEST_FIRST = table.clone(Config.Mutations)
+table.sort(MUTATIONS_BEST_FIRST, function(a, b)
+	return a.mult > b.mult
+end)
+
+local function rollMutation(s, ev, luck)
+	local current = s.mut and Config.MutationById[s.mut]
+	for _, m in ipairs(MUTATIONS_BEST_FIRST) do
+		if m.mult > (current and current.mult or 1) and (not m.event or (ev and ev.id == m.event)) and math.random() < m.chance * luck then
+			s.mut = m.id
+			return m
+		end
+	end
+	return nil
+end
+
+-- returns { { uid, def, lv, mut } } for every student who levelled up
+local function growStudents(player, data, seconds)
+	local ev = Config.EventAt(os.time())
+	local luck = (ev and ev.mutationLuck or 1) * (luckyNow(data) and Config.LuckyHourMutation or 1)
+	local ups = {}
+	for _, room in ipairs(data.rooms) do
+		for _, uid in ipairs(room.occupants) do
+			local s = data.students[uid]
+			if s then
+				s.xp = (s.xp or 0) + seconds
+				local lv = Config.GlowLevel(s.xp)
+				if lv > (s.lv or 1) then
+					local mut = nil
+					for _ = (s.lv or 1) + 1, lv do
+						mut = rollMutation(s, ev, luck) or mut
+					end
+					s.lv = lv
+					table.insert(ups, { uid = uid, def = Config.StudentById[s.id], lv = lv, mut = mut })
+				end
+			end
+		end
+	end
+	return ups
+end
+
+local function shout(player, ups, quiet)
+	for _, u in ipairs(ups) do
+		local name = u.def.name
+		if u.mut then
+			notify(player, string.format("%s %s mutated: %s! (x%s income)", u.mut.emoji, name, string.upper(u.mut.id), tostring(u.mut.mult)), "cash")
+			if u.mut.mult >= 2 then
+				AnnounceEv:FireAllClients({ text = string.format("%s %s's %s just mutated %s!", u.mut.emoji, player.DisplayName, name, string.upper(u.mut.id)) })
+			end
+		elseif not quiet then
+			notify(player, string.format("🌱 %s glowed up to Lv %d (+%d%% income)", name, u.lv, math.floor(Config.GlowIncome * (u.lv - 1) * 100 + 0.5)), "info")
+		end
+	end
+end
+
+---------------------------------------------------------------------------
+-- Trading and gifts between players in the same server
+---------------------------------------------------------------------------
+local offerSeq = 0
+
+local function snapshot(data, uids)
+	local list = {}
+	for _, uid in ipairs(uids) do
+		local s = data.students[uid]
+		table.insert(list, { uid = uid, id = s.id, shiny = s.shiny, lv = s.lv, mut = s.mut })
+	end
+	return list
+end
+
+-- a list of distinct uids this player owns and can let go of, or nil
+local function ownedList(data, list)
+	if typeof(list) ~= "table" or #list > Config.TradeMaxEach then
+		return nil
+	end
+	local seen, out = {}, {}
+	for _, uid in ipairs(list) do
+		if typeof(uid) ~= "string" or seen[uid] or not data.students[uid] then
+			return nil
+		end
+		if data.outing and table.find(data.outing.members, uid) then
+			return nil
+		end
+		seen[uid] = true
+		table.insert(out, uid)
+	end
+	return out
+end
+
+local function moveStudent(fromData, toData, uid)
+	local s = fromData.students[uid]
+	forget(fromData, uid)
+	local nu = DataService.NewUid(toData)
+	toData.students[nu] = { id = s.id, shiny = s.shiny, xp = s.xp, lv = s.lv, mut = s.mut }
+	toData.discovered[s.id] = true
+end
+
+function Actions.roster(player, data, args)
+	local other = typeof(args.userId) == "number" and Players:GetPlayerByUserId(args.userId)
+	local od = other and other ~= player and DataService.Get(other)
+	if not od then
+		return { ok = false, err = "They left the server." }
+	end
+	local uids = {}
+	for uid in pairs(od.students) do
+		table.insert(uids, uid)
+	end
+	return { ok = true, name = other.DisplayName, students = snapshot(od, uids) }
+end
+
+function Actions.tradeOffer(player, data, args)
+	local other = typeof(args.userId) == "number" and Players:GetPlayerByUserId(args.userId)
+	local od = other and other ~= player and DataService.Get(other)
+	local os2 = other and session[other]
+	if not od or not os2 then
+		return { ok = false, err = "They left the server." }
+	end
+	local give, want = ownedList(data, args.give), ownedList(od, args.want)
+	if not give or not want then
+		return { ok = false, err = "Pick up to " .. Config.TradeMaxEach .. " students on each side (not ones out on an outing)." }
+	end
+	if #give + #want == 0 then
+		return { ok = false, err = "Pick at least one student." }
+	end
+	offerSeq += 1
+	for i = #os2.offers, 1, -1 do
+		if os2.offers[i].from == player.UserId then
+			table.remove(os2.offers, i) -- one open offer per sender
+		end
+	end
+	table.insert(os2.offers, { id = offerSeq, from = player.UserId, fromName = player.DisplayName, give = snapshot(data, give), want = snapshot(od, want) })
+	notify(other, "🤝 " .. player.DisplayName .. (#want == 0 and " sent you a gift!" or " sent you a trade offer!") .. " Open 🤝 Trade to answer.", "info")
+	pushState(other)
+	return { ok = true }
+end
+
+function Actions.tradeRespond(player, data, args)
+	local s = session[player]
+	local offer, index = nil, nil
+	for i, o in ipairs(s.offers) do
+		if o.id == args.id then
+			offer, index = o, i
+		end
+	end
+	if not offer then
+		return { ok = false, err = "That offer is gone." }
+	end
+	table.remove(s.offers, index)
+	local other = Players:GetPlayerByUserId(offer.from)
+	local od = other and DataService.Get(other)
+	if not args.accept then
+		if other then
+			notify(other, "🤝 " .. player.DisplayName .. " said no thanks.", "info")
+		end
+		return { ok = true }
+	end
+	if not od then
+		return { ok = false, err = "They left the server." }
+	end
+	local give, want = {}, {}
+	for _, e in ipairs(offer.give) do
+		table.insert(give, e.uid)
+	end
+	for _, e in ipairs(offer.want) do
+		table.insert(want, e.uid)
+	end
+	-- both sides must still have exactly what was offered
+	local okGive, okWant = ownedList(od, give), ownedList(data, want)
+	for _, e in ipairs(offer.give) do
+		okGive = okGive and od.students[e.uid].id == e.id and okGive
+	end
+	for _, e in ipairs(offer.want) do
+		okWant = okWant and data.students[e.uid].id == e.id and okWant
+	end
+	if not okGive or not okWant then
+		return { ok = false, err = "Something in that offer changed. Ask for a new one." }
+	end
+	for _, e in ipairs(offer.give) do
+		if not houseAllows(data, e.id) then
+			return { ok = false, err = "Your house rule doesn't allow " .. Config.StudentById[e.id].name .. "." }
+		end
+	end
+	for _, e in ipairs(offer.want) do
+		if not houseAllows(od, e.id) then
+			return { ok = false, err = "Their house rule doesn't allow " .. Config.StudentById[e.id].name .. "." }
+		end
+	end
+	if countStudents(data) - #want + #give > Config.MaxStudents or countStudents(od) - #give + #want > Config.MaxStudents then
+		return { ok = false, err = "Someone's roster would be too full." }
+	end
+	for _, uid in ipairs(give) do
+		moveStudent(od, data, uid)
+	end
+	for _, uid in ipairs(want) do
+		moveStudent(data, od, uid)
+	end
+	notify(other, "🤝 " .. player.DisplayName .. " accepted your " .. (#want == 0 and "gift!" or "trade!"), "cash")
+	pushState(other)
+	return { ok = true }
+end
+
 function Actions.assign(player, data, args)
 	local uid, roomIndex = args.uid, args.room
 	if typeof(uid) ~= "string" or typeof(roomIndex) ~= "number" then
@@ -558,14 +834,7 @@ function Actions.expel(player, data, args)
 	end
 	local def = Config.StudentById[s.id]
 	local value = Config.Rarities[def.rarity].expel * (s.shiny and 3 or 1)
-	removeFromRoom(data, args.uid)
-	data.students[args.uid] = nil
-	for key in pairs(data.bonds) do
-		local x, y = string.match(key, "^(.-)|(.*)$")
-		if x == args.uid or y == args.uid then
-			data.bonds[key] = nil
-		end
-	end
+	forget(data, args.uid)
 	data.cash += value
 	return { ok = true, value = value }
 end
@@ -895,7 +1164,7 @@ function Actions.tutorialDone(player, data)
 	return { ok = true }
 end
 
-local NO_STATE_PUSH = { visit = true, home = true }
+local NO_STATE_PUSH = { visit = true, home = true, roster = true }
 local cooldown = {}
 
 ActionFn.OnServerInvoke = function(player, action, args)
@@ -940,6 +1209,24 @@ product("CashSmall", function(player, data)
 	local amount = math.max(5000, math.floor(session[player].totals.income * 600))
 	data.cash += amount
 	notify(player, "💰 +$" .. SchoolMath.format(amount), "cash")
+	return true
+end)
+product("RestockNow", function(player, data)
+	local st = applicantState(data)
+	st.salt += 1
+	st.bought = {}
+	notify(player, "📋 Fresh applicants, just for you!", "cash")
+	return true
+end)
+product("LuckyHour", function(player, data)
+	data.luckUntil = math.max(os.time(), data.luckUntil or 0) + Config.LuckyHourSeconds
+	notify(player, "🍀 Lucky Hour! Rarer applicants and 2x mutations for an hour.", "cash")
+	return true
+end)
+product("GlowBoost", function(player, data)
+	local ups = growStudents(player, data, Config.GlowBoostSeconds)
+	notify(player, string.format("🌱 Everyone grew an hour! %d glow-up%s.", #ups, #ups == 1 and "" or "s"), "cash")
+	shout(player, ups, true)
 	return true
 end)
 product("DoubleOffline", function(player, data)
@@ -1039,7 +1326,7 @@ local function onPlayerAdded(player)
 		return
 	end
 
-	local s = { plot = plot, passes = {}, friends = 0, friendCache = {}, mult = 1, dirty = true, offlinePending = 0 }
+	local s = { plot = plot, passes = {}, friends = 0, friendCache = {}, mult = 1, dirty = true, offlinePending = 0, offers = {} }
 	session[player] = s
 	for key in pairs(Config.GamePasses) do
 		s.passes[key] = passOwned(player, key)
@@ -1057,6 +1344,15 @@ local function onPlayerAdded(player)
 				s.offlinePending = earned
 				task.delay(3, function()
 					NotifyEv:FireClient(player, { kind = "welcomeBack", amount = earned, seconds = away }, "welcome")
+				end)
+			end
+			-- students kept growing while you were away
+			local ups = growStudents(player, data, away)
+			if #ups > 0 then
+				recompute(player)
+				task.delay(5, function()
+					notify(player, string.format("🌱 %d student%s glowed up while you were away!", #ups, #ups == 1 and "" or "s"), "cash")
+					shout(player, ups, true)
 				end)
 			end
 		end
@@ -1110,11 +1406,50 @@ task.spawn(function()
 				local inc = s.totals.income
 				data.cash += inc
 				data.totalEarned += inc
+				local ups = growStudents(player, data, 1)
+				if #ups > 0 then
+					shout(player, ups)
+					pushState(player)
+				end
 				local ls = player:FindFirstChild("leaderstats")
 				if ls then
 					ls.Cash.Value = "$" .. SchoolMath.format(data.cash)
 				end
 				TickEv:FireClient(player, data.cash, inc)
+			end
+		end
+	end
+end)
+
+-- restocks and school events: everyone sees the new board / multipliers at once
+task.spawn(function()
+	local lastWindow, lastEvent = stockWindow(), Config.EventAt(os.time())
+	while true do
+		task.wait(2)
+		local w, ev = stockWindow(), Config.EventAt(os.time())
+		local changed = false
+		if w ~= lastWindow then
+			lastWindow, changed = w, true
+			local best = nil
+			for _, a in ipairs(SchoolMath.applicants(w, 0, false, 0)) do
+				local def = Config.StudentById[a.id]
+				if not def.event and Config.Rarities[def.rarity].rank >= 5 and (not best or Config.Rarities[def.rarity].rank > Config.Rarities[best.rarity].rank) then
+					best = def
+				end
+			end
+			if best then
+				AnnounceEv:FireAllClients({ text = string.format("📋 A %s applicant is on the board: %s! Open 🎓 Enroll.", string.upper(best.rarity), best.name) })
+			end
+		end
+		if ev ~= lastEvent then
+			lastEvent, changed = ev, true
+			if ev then
+				AnnounceEv:FireAllClients({ text = string.format("%s %s has started! %s", ev.emoji, ev.name, ev.text) })
+			end
+		end
+		if changed then
+			for player in pairs(session) do
+				pushState(player)
 			end
 		end
 	end

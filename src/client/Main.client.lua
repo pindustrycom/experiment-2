@@ -119,7 +119,7 @@ local hud = UI.new("Frame", {
 	BackgroundTransparency = 1,
 	AnchorPoint = Vector2.new(0.5, 0),
 	Position = UDim2.new(0.5, 0, 0, 8),
-	Size = UDim2.fromOffset(600, 56),
+	Size = UDim2.fromOffset(820, 56),
 	Parent = gui,
 })
 UI.list(hud, 8, true, Enum.HorizontalAlignment.Center)
@@ -136,6 +136,23 @@ local moodLabel, moodSub = pill("😐 0%", C.gold, 130)
 local likeLabel, likeSub = pill("❤ 0", C.pink, 120)
 moodSub.Text = "satisfaction"
 likeSub.Text = "likes"
+local eventLabel, eventSub = pill("📅", Color3.fromRGB(120, 200, 255), 210)
+
+-- the server's clock (the client's can be off by a little)
+local function serverNow()
+	return os.time() + (State.clockSkew or 0)
+end
+
+local function updateEventPill()
+	local ev, endsAt, nextEv, nextAt = Config.EventAt(serverNow())
+	if ev then
+		eventLabel.Text = ev.emoji .. " " .. ev.name
+		eventSub.Text = "ends in " .. UI.formatTime(endsAt - serverNow())
+	else
+		eventLabel.Text = "📅 Next: " .. nextEv.emoji
+		eventSub.Text = nextEv.name .. " in " .. UI.formatTime(nextAt - serverNow())
+	end
+end
 
 local function setCash(cash, inc)
 	cashLabel.Text = "💰 $" .. fmt(cash)
@@ -150,7 +167,7 @@ local menu = UI.new("Frame", {
 	BackgroundTransparency = 1,
 	AnchorPoint = Vector2.new(0, 0.5),
 	Position = UDim2.new(0, 10, 0.5, 0),
-	Size = UDim2.fromOffset(120, 520),
+	Size = UDim2.fromOffset(120, 580),
 	Parent = gui,
 })
 UI.list(menu, 8)
@@ -179,6 +196,7 @@ UI.button(menu, "🏠 My Room", Color3.fromRGB(90, 120, 200), function()
 	call("home")
 end, { Size = UDim2.fromOffset(120, 50), TextSize = 19 })
 menuButton("visit", "🗺 Visit", C.pink)
+local tradeButton = menuButton("trade", "🤝 Trade", Color3.fromRGB(80, 170, 110))
 local dailyButton = menuButton("daily", "🎁 Daily", C.gold)
 local inviteButton = UI.button(menu, "📣 Invite", C.green, function()
 	SFX.click()
@@ -313,6 +331,15 @@ local function studentCard(parent, uid, s, extra)
 	UI.pad(f, 8)
 	UI.text(f, Config.TagEmoji(def), 38, C.text, { Size = UDim2.new(1, 0, 0, 44), TextXAlignment = Enum.TextXAlignment.Center })
 	UI.text(f, def.gender == "F" and "👧" or "👦", 16, C.text, { Size = UDim2.fromOffset(22, 22) })
+	local mut = s.mut and Config.MutationById[s.mut]
+	if mut or (s.lv or 1) > 1 then
+		UI.text(f, (mut and mut.emoji or "") .. ((s.lv or 1) > 1 and ("Lv" .. s.lv) or ""), 14, mut and mut.color or C.gold, {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.fromScale(1, 0),
+			Size = UDim2.fromOffset(70, 20),
+			TextXAlignment = Enum.TextXAlignment.Right,
+		})
+	end
 	UI.text(f, (s.shiny and "✨" or "") .. (def.crew and "🌹" or "") .. def.name, 16, def.crew and Config.Tags.LaRose.color or C.text, { Position = UDim2.fromOffset(0, 44), Size = UDim2.new(1, 0, 0, 38), TextXAlignment = Enum.TextXAlignment.Center })
 	UI.text(f, tagText(def), 12, rarity.color, { Position = UDim2.fromOffset(0, 82), Size = UDim2.new(1, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Center })
 	if def.trait then
@@ -455,6 +482,69 @@ Remotes:WaitForChild("PullResult").OnClientEvent:Connect(reveal)
 -- Panels
 ---------------------------------------------------------------------------
 local Render = {}
+local refresh -- forward
+
+-- what the server is selling right now (SchoolMath.applicants is deterministic)
+local function applicantBoard(owned)
+	local d = State.data
+	local now = serverNow()
+	local w = now // Config.RestockSeconds
+	local st = d.applicants
+	local mine = st and st.window == w
+	local lucky = (d.luckUntil or 0) > now
+	return SchoolMath.applicants(w, mine and st.salt or 0, lucky, owned), w, mine and st.salt or 0, mine and st.bought or {}, lucky
+end
+
+local restockLabel = nil
+
+local function renderApplicants(owned)
+	local d = State.data
+	local list, window, salt, bought, lucky = applicantBoard(owned)
+	local head = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 40), LayoutOrder = -3, Parent = scroll })
+	UI.text(head, "📋 Applicants", 24, C.gold, { Size = UDim2.fromOffset(170, 34) })
+	restockLabel = UI.text(head, "new faces in <b>" .. UI.formatTime(Config.RestockSeconds - serverNow() % Config.RestockSeconds) .. "</b>", 16, C.sub, { Position = UDim2.fromOffset(170, 4), Size = UDim2.new(1, -330, 0, 30) })
+	local id = State.products and State.products.RestockNow
+	if id and id ~= 0 then
+		UI.button(head, "🔄 New faces now (R$)", C.gold, function()
+			MarketplaceService:PromptProductPurchase(player, id)
+		end, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(150, 34), TextSize = 14 })
+	end
+	local ev = Config.EventAt(serverNow())
+	local note = lucky and "🍀 Lucky Hour: rare applicants are 4x likelier! " or ""
+	if ev then
+		note ..= ev.emoji .. " " .. ev.name .. ": " .. ev.text
+	end
+	if note ~= "" then
+		UI.text(scroll, note, 15, lucky and C.green or Color3.fromRGB(120, 200, 255), { Size = UDim2.new(1, 0, 0, 36), LayoutOrder = -2 })
+	end
+	local grid = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = -1, Parent = scroll })
+	UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(170, 200), CellPadding = UDim2.fromOffset(10, 10), SortOrder = Enum.SortOrder.LayoutOrder, Parent = grid })
+	for slot, a in ipairs(list) do
+		local def = Config.StudentById[a.id]
+		local card = studentCard(grid, nil, a, function(f)
+			if def.event then
+				UI.text(f, "⏳ EVENT", 13, C.gold, { AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.fromOffset(70, 20), TextXAlignment = Enum.TextXAlignment.Right })
+			end
+			if bought[tostring(slot)] then
+				UI.text(f, "✅ Hired", 18, C.green, { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 30), TextXAlignment = Enum.TextXAlignment.Center })
+			else
+				smallButton(f, "Hire $" .. fmt(a.price), d.cash >= a.price and C.green or Color3.fromRGB(110, 110, 120), function()
+					local res = call("hire", { slot = slot, window = window, salt = salt })
+					if result(res) then
+						reveal(res.results)
+					else
+						refresh()
+					end
+				end)
+			end
+		end)
+		card.LayoutOrder = slot
+		if bought[tostring(slot)] then
+			card.BackgroundTransparency = 0.5
+		end
+	end
+	UI.text(scroll, "🎰 Or roll the dice with a mystery admission:", 18, C.text, { Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 0 })
+end
 
 function Render.enroll()
 	panelTitle.Text = "🎓 Admissions Office"
@@ -464,6 +554,7 @@ function Render.enroll()
 	for _ in pairs(d.students) do
 		owned += 1
 	end
+	renderApplicants(owned)
 	UI.text(scroll, string.format("⭐ Legendary guaranteed in <b>%d</b> pulls  •  Shiny chance 1 in %d  •  Roster %d/%d (bigger roster = pricier admissions)", Config.PityPulls - d.pity, math.floor(1 / Config.ShinyChance), owned, Config.MaxStudents), 15, C.sub, { Size = UDim2.new(1, 0, 0, 40) })
 	for i, banner in ipairs(Config.Banners) do
 		local f = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 132), LayoutOrder = i, BackgroundColor3 = banner.color:Lerp(C.card, 0.65) })
@@ -1466,7 +1557,7 @@ function Render.visit()
 		call("visit", {})
 		openPanel(nil)
 	end, { Size = UDim2.fromOffset(140, 40) })
-	UI.text(scroll, "Visit other houses, steal decorating ideas, and leave a ❤ — every like pays the owner a minute of income!", 16, C.sub, { Size = UDim2.new(1, 0, 0, 44) })
+	UI.text(scroll, "House tours! Visit other houses, steal decorating ideas, and leave a ❤. Every like pays the owner a minute of income.", 16, C.sub, { Size = UDim2.new(1, 0, 0, 44) })
 	local plots = workspace:FindFirstChild("BSTWorld")
 	local count = 0
 	for _, other in ipairs(Players:GetPlayers()) do
@@ -1479,8 +1570,11 @@ function Render.visit()
 			local inc = ls and ls:FindFirstChild("Income")
 			local likes = ls and ls:FindFirstChild("Likes")
 			UI.text(f, string.format("$%s/s  •  ❤ %s", fmt(inc and inc.Value or 0), fmt(likes and likes.Value or 0)), 15, C.sub, { Position = UDim2.fromOffset(0, 24), Size = UDim2.new(0.5, 0, 0, 20) })
-			local row = UI.new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(240, 40), Parent = f })
+			local row = UI.new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(330, 40), Parent = f })
 			UI.list(row, 8, true, Enum.HorizontalAlignment.Right)
+			UI.button(row, "🤝 Trade", C.green, function()
+				startTrade(other)
+			end, { Size = UDim2.fromOffset(100, 40) })
 			UI.button(row, "Visit", C.blue, function()
 				call("visit", { userId = other.UserId })
 				openPanel(nil)
@@ -1494,6 +1588,140 @@ function Render.visit()
 		UI.text(scroll, "You're the only one here... invite friends! Each friend in the server gives you +10% income. 📣", 18, C.gold, { Size = UDim2.new(1, 0, 0, 60), LayoutOrder = 1 })
 	end
 	local _ = plots
+end
+
+-- trading and gifts
+local function pickCard(parent, e, selected, onClick)
+	local def = Config.StudentById[e.id]
+	local rarity = Config.Rarities[def.rarity]
+	local mut = e.mut and Config.MutationById[e.mut]
+	local text = string.format("%s%s%s\n<font color=\"#%s\">%s%s</font>", selected and "✅ " or "", e.shiny and "✨" or "", def.name, rarity.color:ToHex(), mut and (mut.emoji .. " ") or "", def.rarity .. ((e.lv or 1) > 1 and (" Lv" .. e.lv) or ""))
+	local b = UI.button(parent, text, selected and Color3.fromRGB(60, 140, 80) or C.card, onClick, { RichText = true, TextSize = 14, TextWrapped = true })
+	b:FindFirstChildOfClass("UIStroke").Color = selected and C.green or rarity.color
+	b:FindFirstChildOfClass("UIStroke").Transparency = 0
+	return b
+end
+
+local function pickGrid(order)
+	local grid = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = order, Parent = scroll })
+	UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(150, 52), CellPadding = UDim2.fromOffset(8, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = grid })
+	return grid
+end
+
+local function names(list)
+	local out = {}
+	for _, e in ipairs(list) do
+		local mut = e.mut and Config.MutationById[e.mut]
+		table.insert(out, (e.shiny and "✨" or "") .. (mut and mut.emoji or "") .. Config.StudentById[e.id].name .. ((e.lv or 1) > 1 and (" Lv" .. e.lv) or ""))
+	end
+	return #out == 0 and "nothing" or table.concat(out, ", ")
+end
+
+local function startTrade(other)
+	local res = call("roster", { userId = other.UserId })
+	if not result(res) then
+		return
+	end
+	panelState.trade = { userId = other.UserId, name = res.name, theirs = res.students, give = {}, want = {} }
+	openPanel("trade")
+end
+
+function Render.trade()
+	local d = State.data
+	local t = panelState.trade
+	panelTitle.Text = t and ("🤝 Trade with " .. t.name) or "🤝 Trades & Gifts"
+	resetLayout("list")
+	if t then
+		UI.button(toolbar, "◀ Back", C.blue, function()
+			panelState.trade = nil
+			refresh()
+		end, { Size = UDim2.fromOffset(100, 40) })
+		local function count(set)
+			local n = 0
+			for _ in pairs(set) do
+				n += 1
+			end
+			return n
+		end
+		local function keys(set)
+			local out = {}
+			for k in pairs(set) do
+				table.insert(out, k)
+			end
+			return out
+		end
+		local nGive, nWant = count(t.give), count(t.want)
+		UI.button(toolbar, nWant == 0 and "🎁 Send as gift" or "📨 Send offer", nGive + nWant > 0 and C.green or Color3.fromRGB(110, 110, 120), function()
+			if result(call("tradeOffer", { userId = t.userId, give = keys(t.give), want = keys(t.want) }), nWant == 0 and "🎁 Gift sent!" or "📨 Offer sent! Waiting for " .. t.name .. ".") then
+				panelState.trade = nil
+				refresh()
+			end
+		end, { Size = UDim2.fromOffset(170, 40) })
+		UI.text(scroll, string.format("You give (%d/%d): tap your students", nGive, Config.TradeMaxEach), 18, C.gold, { Size = UDim2.new(1, 0, 0, 26), LayoutOrder = 1 })
+		local mine = pickGrid(2)
+		local list = {}
+		for uid, st in pairs(d.students) do
+			table.insert(list, { uid = uid, id = st.id, shiny = st.shiny, lv = st.lv, mut = st.mut })
+		end
+		table.sort(list, function(a, b)
+			local ra, rb = Config.Rarities[Config.StudentById[a.id].rarity].rank, Config.Rarities[Config.StudentById[b.id].rarity].rank
+			return ra ~= rb and ra > rb or (a.lv or 1) > (b.lv or 1)
+		end)
+		for i, e in ipairs(list) do
+			pickCard(mine, e, t.give[e.uid], function()
+				t.give[e.uid] = (not t.give[e.uid] and nGive < Config.TradeMaxEach) or nil
+				refresh()
+			end).LayoutOrder = i
+		end
+		UI.text(scroll, string.format("You want (%d/%d): tap theirs, or pick none to send a gift", nWant, Config.TradeMaxEach), 18, C.gold, { Size = UDim2.new(1, 0, 0, 26), LayoutOrder = 3 })
+		local theirs = pickGrid(4)
+		for i, e in ipairs(t.theirs) do
+			pickCard(theirs, e, t.want[e.uid], function()
+				t.want[e.uid] = (not t.want[e.uid] and nWant < Config.TradeMaxEach) or nil
+				refresh()
+			end).LayoutOrder = i
+		end
+		return
+	end
+	UI.text(scroll, "Swap students with players in this server, or gift one to a friend. Levels and mutations travel with them!", 16, C.sub, { Size = UDim2.new(1, 0, 0, 44) })
+	local offers = State.offers or {}
+	if #offers > 0 then
+		UI.text(scroll, "📬 Offers for you", 20, C.gold, { Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 1 })
+	end
+	for i, o in ipairs(offers) do
+		local gift = #o.want == 0
+		local f = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 92), LayoutOrder = 1 + i })
+		UI.pad(f, 10)
+		UI.text(f, (gift and "🎁 " or "🤝 ") .. o.fromName .. (gift and " sent you a gift" or " wants to trade"), 19, C.text, { Size = UDim2.new(1, -230, 0, 24) })
+		UI.text(f, "You get: <b>" .. names(o.give) .. "</b>", 14, C.green, { Position = UDim2.fromOffset(0, 26), Size = UDim2.new(1, -230, 0, 20) })
+		if not gift then
+			UI.text(f, "You give: <b>" .. names(o.want) .. "</b>", 14, C.red, { Position = UDim2.fromOffset(0, 46), Size = UDim2.new(1, -230, 0, 20) })
+		end
+		local row = UI.new("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(220, 40), Parent = f })
+		UI.list(row, 8, true, Enum.HorizontalAlignment.Right)
+		UI.button(row, "Accept", C.green, function()
+			result(call("tradeRespond", { id = o.id, accept = true }), gift and "🎁 Gift accepted!" or "🤝 Trade done!")
+		end, { Size = UDim2.fromOffset(100, 40) })
+		UI.button(row, "Decline", C.red, function()
+			call("tradeRespond", { id = o.id, accept = false })
+		end, { Size = UDim2.fromOffset(100, 40) })
+	end
+	UI.text(scroll, "👥 Players here", 20, C.gold, { Size = UDim2.new(1, 0, 0, 28), LayoutOrder = 50 })
+	local count = 0
+	for _, other in ipairs(Players:GetPlayers()) do
+		if other ~= player then
+			count += 1
+			local f = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 56), LayoutOrder = 50 + count })
+			UI.pad(f, 10)
+			UI.text(f, other.DisplayName, 20, C.text, { Size = UDim2.new(0.6, 0, 0, 34) })
+			UI.button(f, "🤝 Trade / Gift", C.green, function()
+				startTrade(other)
+			end, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(160, 38) })
+		end
+	end
+	if count == 0 then
+		UI.text(scroll, "Nobody else is here yet. Invite a friend to trade! 📣", 18, C.gold, { Size = UDim2.new(1, 0, 0, 40), LayoutOrder = 51 })
+	end
 end
 
 function Render.daily()
@@ -1543,6 +1771,9 @@ function Render.shop()
 		{ key = "CashSmall", name = "💰 Cash Bag", text = "10 minutes of income instantly" },
 		{ key = "RoyalPull", name = "👑 Royal Admission", text = "One Royal pull (8.5% Legendary)" },
 		{ key = "RoyalPull10", name = "👑 Royal Admission x10", text = "Ten Royal pulls" },
+		{ key = "RestockNow", name = "🔄 New Applicants", text = "A fresh Applicants board right now" },
+		{ key = "LuckyHour", name = "🍀 Lucky Hour", text = "1 hour: rare applicants 4x likelier, 2x mutations" },
+		{ key = "GlowBoost", name = "🌱 Glow Boost", text = "Every housed student grows a full hour instantly" },
 	}
 	for i, p in ipairs(products) do
 		local id = State.products and State.products[p.key]
@@ -1565,6 +1796,9 @@ openPanel = function(id)
 		end
 		if id ~= "layout" then
 			panelState.design = nil
+		end
+		if id ~= "trade" then
+			panelState.trade = nil
 		end
 		panelState.expel = nil
 		scroll.CanvasPosition = Vector2.zero
@@ -1602,7 +1836,7 @@ openPanel = function(id)
 	end
 end
 
-local function refresh()
+refresh = function()
 	if currentPanel then
 		openPanel(currentPanel)
 	end
@@ -1621,6 +1855,10 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 	State.gamePasses = st.gamePasses
 	State.products = st.products
 	State.dailyAt = os.time() + st.dailyIn
+	State.clockSkew = (st.now or os.time()) - os.time()
+	State.offers = st.offers or {}
+	tradeButton.Text = #State.offers > 0 and ("🤝 Trade (" .. #State.offers .. ")") or "🤝 Trade"
+	updateEventPill()
 	setCash(st.data.cash, st.income)
 	moodLabel.Text = SchoolMath.moodEmoji(st.satisfaction) .. " " .. math.floor(st.satisfaction) .. "%"
 	likeLabel.Text = "❤ " .. fmt(st.data.likes)
@@ -1639,7 +1877,9 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 				"🏠 Welcome, Headmaster! This is your room. You live in this boarding house with your students.",
 				"🛏 Walk out into the hallway, go to a dorm door and press <b>E</b> (or open <b>Rooms</b>) to move your 2 students in. Housed students earn cash every second.",
 				"💞 Every student has <b>tags</b>, and tags decide their <b>vibe</b>. Nerds + Gamers click, Bullies ruin rooms. Good roommates become friends, then best friends. Happy rooms earn up to 2x more.",
-				"🎓 Use <b>Enroll</b> to recruit new students. Find Legendary & Mythic ones and shiny ✨ variants!",
+				"🎓 Use <b>Enroll</b> to recruit new students. The <b>Applicants</b> board gets new faces every 5 minutes, so check back for Legendary & Mythic ones and shiny ✨ variants!",
+				"🌱 Housed students <b>glow up</b> over time (even while you're offline): every level earns more, and some <b>mutate</b> 🌟💰⛈👑🌈 for huge bonuses.",
+				"📅 Every hour a <b>school event</b> runs for 20 minutes (Exam Week, Prom, Thunderstorm, Talent Show) with boosts and a limited-time student. Use <b>Trade</b> to swap or gift students with other players!",
 				"📋 Your room has 3 boards on the wall. <b>Floor plans</b>: design your house: hallways, rooms of any size, stairs, supports and new floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. Walk up and press <b>E</b>.",
 				"🎨 Use <b>Build</b> to pick materials for walls, floors and the roof, and to furnish your room. Nicer dorms = happier students!",
 			}
@@ -1714,7 +1954,9 @@ local announceBar = UI.text(gui, "", 24, C.gold, {
 local announceToken = 0
 Remotes:WaitForChild("Announce").OnClientEvent:Connect(function(info)
 	local text
-	if info.floor then
+	if info.text then
+		text = info.text
+	elseif info.floor then
 		text = string.format("🏢 %s's boarding house just grew to %d floors!", info.player, info.floor)
 	else
 		local color = Config.Rarities[info.rarity].color
@@ -1833,6 +2075,19 @@ task.spawn(function()
 			dailyButton.Text = left <= 0 and "🎁 FREE!" or ("🎁 " .. UI.formatTime(left))
 			if currentPanel == "daily" and left >= -1 and left <= 0 then
 				refresh()
+			end
+		end
+		if State.data then
+			updateEventPill()
+			local now = serverNow()
+			local left = Config.RestockSeconds - now % Config.RestockSeconds
+			if currentPanel == "enroll" then
+				if restockLabel and restockLabel.Parent then
+					restockLabel.Text = "new faces in <b>" .. UI.formatTime(left) .. "</b>"
+				end
+				if left == Config.RestockSeconds then
+					refresh()
+				end
 			end
 		end
 	end

@@ -278,7 +278,7 @@ function SchoolMath.room(data, index, occupantUids, globalMult, ctx)
 		sat = math.clamp(sat, 0, 100)
 
 		local rarity = Config.Rarities[d.def.rarity]
-		local base = rarity.income * (d.s.shiny and Config.ShinyMultiplier or 1)
+		local base = rarity.income * (d.s.shiny and Config.ShinyMultiplier or 1) * SchoolMath.glowMult(d.s) * SchoolMath.eventMult(d.def)
 		local income = base * (0.25 + sat / 50) * goldMult * facMult * globalMult * ctx.crewMult * selfMult
 		result.students[d.uid] = { sat = sat, income = income, parts = parts }
 		result.satisfaction += sat
@@ -288,6 +288,66 @@ function SchoolMath.room(data, index, occupantUids, globalMult, ctx)
 		result.satisfaction /= #defs
 	end
 	return result
+end
+
+-- income multiplier from a student's glow-up level and mutation
+function SchoolMath.glowMult(s)
+	local mut = s.mut and Config.MutationById[s.mut]
+	return (1 + Config.GlowIncome * ((s.lv or 1) - 1)) * (mut and mut.mult or 1)
+end
+
+-- income multiplier from the school event running now
+function SchoolMath.eventMult(def, now)
+	local ev = Config.EventAt(now or os.time())
+	if ev and ev.tags then
+		for _, t in ipairs(def.tags) do
+			if table.find(ev.tags, t) then
+				return ev.mult
+			end
+		end
+	end
+	return 1
+end
+
+-- The Applicants board for a stock window: { { id, shiny, price } ... }.
+-- Deterministic, so the client shows exactly what the server sells.
+-- salt > 0 is a personal restock; lucky makes rare applicants likelier.
+function SchoolMath.applicants(window, salt, lucky, owned)
+	local rng = Random.new(window * 7919 + (salt or 0) * 104729 + (lucky and 31 or 0))
+	local weights = table.clone(Config.ApplicantWeights)
+	if lucky then
+		for _, r in ipairs({ "Epic", "Legendary", "Mythic" }) do
+			weights[r] *= Config.LuckyHourRare
+		end
+	end
+	local total = 0
+	for _, r in ipairs(Config.RarityOrder) do
+		total += weights[r]
+	end
+	local growth = Config.PullCostGrowth ^ math.max(0, (owned or 0) - 2)
+	local list = {}
+	local ev = Config.EventAt(window * Config.RestockSeconds)
+	for slot = 1, Config.ApplicantSlots do
+		local def
+		if slot == 1 and ev and ev.student then
+			def = Config.StudentById[ev.student]
+		else
+			local pick, rarity = rng:NextNumber() * total, "Common"
+			for _, r in ipairs(Config.RarityOrder) do
+				pick -= weights[r]
+				if pick <= 0 then
+					rarity = r
+					break
+				end
+			end
+			local pool = Config.StudentsByRarity[rarity]
+			def = pool[rng:NextInteger(1, #pool)]
+		end
+		local shiny = rng:NextNumber() < Config.ShinyChance
+		local price = Config.ApplicantPrice[def.rarity] * (shiny and Config.ApplicantShinyPrice or 1) * growth
+		table.insert(list, { id = def.id, shiny = shiny, price = math.floor(price / 10 + 0.5) * 10 })
+	end
+	return list
 end
 
 function SchoolMath.totals(data, globalMult)

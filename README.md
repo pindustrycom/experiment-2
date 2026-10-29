@@ -21,7 +21,7 @@ Progress doesn't save in Studio until you complete the publishing steps below. U
 3. Go to **Game Settings > Permissions** and set the game to **Public**.
 4. Optional, for Robux: in the Creator Dashboard, create game passes and developer products, then paste their IDs into `ReplicatedStorage > Shared > Config`, under `Config.GamePasses` and `Config.Products`. Any ID left at `0` is hidden in-game. The Shop button only shows up once at least one ID is set.
    - Game passes: `DoubleCash` (2x income), `Lucky` (+50% Legendary/Mythic odds), `VIP` (+10% income)
-   - Developer products: `RoyalPull`, `RoyalPull10`, `CashSmall`, `DoubleOffline`
+   - Developer products: `RoyalPull`, `RoyalPull10`, `CashSmall`, `DoubleOffline`, `RestockNow` (fresh Applicants board), `LuckyHour` (rarer applicants and 2x mutations for an hour), `GlowBoost` (every housed student grows an hour). Robux only skips waits or adds luck, it never sells power outright.
 5. Publish again (Alt+P) after every change.
 
 ## Editing with Rojo (optional, for coders)
@@ -58,6 +58,10 @@ rojo build -o BoardingSchoolTycoon.rbxl
 - **Students**: boys and girls across 6 rarities, each with several **tags** (Alpha, Chad, Nerd, Gamer, Artistic, Funny, Bully, Chud, Sleepy, Carefree...). Rare and better students have traits like *Gold* (room income multiplier), *Mood* (cheers up roommates) and *Chill*. The Legendary **La Rose** crew (Khan D, JP, Ed, Greg, Miguel) vibe with each other and boost income when they all live in your house. 1 in 40 pulls is **Shiny** (2x income, sparkles).
 - **Vibes and friendships**: the vibe between two students is the geometric mean of their tag-pair percentages. Roommates who vibe become friends, best friends and siblings over time (and rooms are always all boys or all girls; the house rule on the Floor plans board picks who applies). **Outings** (movies, park, party...) raise bonds and leave photos on the dorm walls. The **living room** items (guitars, TV, console, VR, canvas) cheer up students with matching tags. Satisfaction (0 to 100%) scales income from 0.25x up to 2.25x.
 - **Only housed students earn money.** That's what pushes players to keep expanding.
+- **Applicants board** (top of 🎓 Enroll): 6 students you can see before you hire, at a fixed price. It restocks for everyone every 5 minutes, so players check back, and a Legendary or Mythic on the board is announced to the whole server. Each card can be hired once per restock.
+- **Glow-ups**: housed students level up over real time (Lv 1 to 10 over about 2 days, offline too). Each level is +15% income. On every level-up a student can **mutate**: 🌟 Glowing x1.5, 🥇 Golden x2, ⛈ Stormy x2.5 (Thunderstorm only), 👑 Royalty x3 (Prom only) or 🌈 Rainbow x4. Mutations x2 and up are announced to the server, and mutated students glow in their mutation's color.
+- **School events**: one every hour for 20 minutes, at the same time in every server (the HUD shows the current one or a countdown to the next). Exam Week, Prom Night, Thunderstorm and Talent Show each boost some tags or mutations and put a limited student (Vee, Preston, Skye, Dahlia) in Applicants slot 1 while it runs.
+- **Trading and gifts** (🤝 Trade, or the Trade button in Visit): pick up to 4 of your students and up to 4 of theirs and send an offer; pick none of theirs to send a gift. Levels and mutations travel with the student. **House tours** are the Visit menu and likes.
 - **Admissions (gacha)**: Open, Honors and Royal banners, each with better odds than the last, plus x10 pulls at 10% off. A Legendary is guaranteed within 75 pulls. Admissions get pricier as your roster grows, and expelling students refunds some cash.
 - **Facilities**: Cafeteria, Library, Gym, Arcade, Art Studio, Music Hall, Pool, Ballroom and Observatory are rooms inside the house, placed wherever you want from the Floor plans board, with their own props. Students drop by to hang out. They boost mood for everyone or for certain personalities, and some add an income multiplier.
 - **Auto-Arrange** solves room assignments for max income in one tap.
@@ -80,8 +84,7 @@ All numbers live in `Config.lua`: room and facility prices, room tiers, material
 ## Ideas for next updates
 
 These keep players coming back if you announce them as "UPDATE 1, 2, 3...":
-- Limited-time event banners (Halloween students, Exchange Week)
-- Trading between players
+- More events (Halloween students, Exchange Week)
 - Furniture for dorm rooms, and free placement (drag furniture anywhere)
 - Demolishing rooms on the floor plan
 - Students that take the stairs and visit other floors (the pathfinding already knows the stairs)
