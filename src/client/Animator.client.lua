@@ -1,5 +1,7 @@
--- Makes students wander around their rooms, bob, and pop mood bubbles
--- (Habbo-style). Runs only on the client, so it costs the server nothing.
+-- Makes students live in the house: they wander their room, pop mood bubbles
+-- (Habbo-style) and now and then walk out the door to hang out in the
+-- hallway, the common room or a facility on their floor, then go home.
+-- Runs only on the client, so it costs the server nothing.
 local CollectionService = game:GetService("CollectionService")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
@@ -9,6 +11,8 @@ local walkers = {} -- [model] = state
 local HAPPY = { "💖", "😄", "🎉", "✨", "🥰" }
 local MEH = { "💭", "🎵", "📚", "😴" }
 local ANGRY = { "💢", "😤", "🙄", "😭" }
+local SPEED = 5
+local OUTING_CHANCE = 0.3
 
 local function bubble(model, sat)
 	local head = model:FindFirstChild("Head")
@@ -31,32 +35,102 @@ local function bubble(model, sat)
 	Debris:AddItem(bb, 2)
 end
 
-local function newTarget(st)
-	local r = st.range
-	local right = Vector3.new(-st.facing.Z, 0, st.facing.X)
-	return st.center + right * (math.random() * 2 - 1) * r.X + st.facing * (math.random() * 2 - 1) * r.Z
+-- an area is { center, u, v, range, door, hall, isHall }
+local function areaFrom(inst)
+	local center, u, v, range = inst:GetAttribute("Center"), inst:GetAttribute("U"), inst:GetAttribute("V"), inst:GetAttribute("Range")
+	if not (center and u and v and range) then
+		return nil
+	end
+	return {
+		center = center,
+		u = u,
+		v = v,
+		range = range,
+		door = inst:GetAttribute("Door") or center,
+		hall = inst:GetAttribute("Hall") or center,
+		isHall = inst:GetAttribute("IsHall") == true,
+		key = inst:GetAttribute("Key") or inst:GetAttribute("HomeKey"),
+	}
+end
+
+local function randomPoint(area)
+	local r = area.range
+	return area.center + area.u * (math.random() * 2 - 1) * r.X + area.v * (math.random() * 2 - 1) * r.Z
+end
+
+-- hangout spots on the same floor of the same house
+local function hangouts(st)
+	local list = {}
+	for _, inst in ipairs(CollectionService:GetTagged("HangoutRoom")) do
+		if inst.Parent and inst:GetAttribute("PlotIndex") == st.plot and inst:GetAttribute("Floor") == st.floor then
+			local a = areaFrom(inst)
+			if a then
+				table.insert(list, a)
+			end
+		end
+	end
+	return list
+end
+
+-- door-to-door route through the hallway
+local function route(from, to)
+	local points = {}
+	if not from.isHall then
+		table.insert(points, from.door)
+		table.insert(points, from.hall)
+	end
+	if not to.isHall then
+		table.insert(points, to.hall)
+		table.insert(points, to.door)
+	end
+	table.insert(points, randomPoint(to))
+	return points
 end
 
 local function add(model)
-	if not model:IsA("Model") then
+	if not model:IsA("Model") or not model.PrimaryPart then
 		return
 	end
-	local center, range, facing = model:GetAttribute("Center"), model:GetAttribute("Range"), model:GetAttribute("Facing")
-	if not (center and range and facing and model.PrimaryPart) then
+	local home = areaFrom(model)
+	if not home then
 		return
 	end
 	local st = {
-		center = center,
-		range = range,
-		facing = facing,
+		home = home,
+		area = home,
+		plot = model:GetAttribute("PlotIndex"),
+		floor = model:GetAttribute("Floor"),
 		pos = model.PrimaryPart.Position,
 		baseY = model.PrimaryPart.Position.Y,
 		wait = math.random() * 2,
 		phase = math.random() * 10,
 		nextBubble = os.clock() + math.random(2, 8),
+		queue = {},
+		outingStops = 0,
 	}
-	st.target = newTarget(st)
+	st.target = randomPoint(home)
 	walkers[model] = st
+end
+
+local function decide(st)
+	if st.area ~= st.home then
+		st.outingStops -= 1
+		if st.outingStops <= 0 then
+			st.queue = route(st.area, st.home)
+			st.area = st.home
+			return
+		end
+	elseif math.random() < OUTING_CHANCE then
+		local spots = hangouts(st)
+		if #spots > 0 then
+			local to = spots[math.random(1, #spots)]
+			st.queue = route(st.home, to)
+			st.area = to
+			st.outingStops = math.random(2, 4)
+			return
+		end
+	end
+	st.queue = { randomPoint(st.area) }
 end
 
 CollectionService:GetInstanceAddedSignal("Student"):Connect(function(m)
@@ -83,16 +157,21 @@ RunService.RenderStepped:Connect(function(dt)
 			if st.wait > 0 then
 				st.wait -= dt
 			elseif delta.Magnitude < 0.3 then
-				st.wait = 1 + math.random() * 3
-				st.target = newTarget(st)
+				if #st.queue > 0 then
+					st.target = table.remove(st.queue, 1)
+				else
+					st.wait = 1 + math.random() * 3
+					decide(st)
+					st.target = table.remove(st.queue, 1)
+				end
 			else
 				moving = true
-				local step = math.min(delta.Magnitude, 5 * dt)
+				local step = math.min(delta.Magnitude, SPEED * dt)
 				st.pos += delta.Unit * step
 				st.dir = delta.Unit
 			end
 			local bob = moving and math.abs(math.sin(st.phase * 10)) * 0.35 or math.sin(st.phase * 2) * 0.08
-			local look = st.dir or st.facing
+			local look = st.dir or st.home.u
 			local p = Vector3.new(st.pos.X, st.baseY + bob, st.pos.Z)
 			model:PivotTo(CFrame.lookAt(p, p + Vector3.new(look.X, 0, look.Z)))
 			if now > st.nextBubble then

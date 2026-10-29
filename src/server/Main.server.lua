@@ -7,6 +7,7 @@ local MarketplaceService = game:GetService("MarketplaceService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local SchoolMath = require(Shared.SchoolMath)
+local House = require(Shared.House)
 local DataService = require(script.Parent.DataService)
 local PlotService = require(script.Parent.PlotService)
 
@@ -230,8 +231,12 @@ local function autoArrange(player, data)
 		return a.value > b.value
 	end)
 
+	local indexOf = {}
+	for i, room in ipairs(data.rooms) do
+		indexOf[room] = i
+	end
 	local function roomIncome(room)
-		return SchoolMath.room(data, room.tier, room.occupants, mult).income
+		return SchoolMath.room(data, indexOf[room], room.occupants, mult).income
 	end
 
 	for n = 1, math.min(beds, #list) do
@@ -356,18 +361,23 @@ function Actions.expel(player, data, args)
 	return { ok = true, value = value }
 end
 
+local function announceFloor(player, data)
+	if House.nextIsNewFloor(data) then
+		AnnounceEv:FireAllClients({ player = player.DisplayName, floor = House.floorCount(data) + 1 })
+	end
+end
+
 function Actions.buyRoom(player, data)
 	local index = #data.rooms + 1
-	if index > Config.RoomsPerFloor * Config.MaxFloors then
-		return { ok = false, err = "Your school is at max size!" }
+	if index > Config.MaxRooms then
+		return { ok = false, err = "Your house is at max size!" }
 	end
 	if not spend(data, Config.RoomUnlockCost(index)) then
 		return { ok = false, err = "Not enough cash!" }
 	end
+	announceFloor(player, data)
 	table.insert(data.rooms, { tier = 1, occupants = {} })
-	if index % Config.RoomsPerFloor == 1 then
-		AnnounceEv:FireAllClients({ player = player.DisplayName, floor = math.ceil(index / Config.RoomsPerFloor) })
-	end
+	table.insert(data.order, "r" .. index)
 	return { ok = true }
 end
 
@@ -395,18 +405,92 @@ function Actions.buyFacility(player, data, args)
 	if not spend(data, f.cost) then
 		return { ok = false, err = "Not enough cash!" }
 	end
+	announceFloor(player, data)
 	data.facilities[f.id] = true
+	table.insert(data.order, "fac:" .. f.id)
+	return { ok = true }
+end
+
+-- a storyboard note: "room", "up:<room>", "fac:<facility>"
+function Actions.note(player, data, args)
+	local key = args.key
+	if typeof(key) ~= "string" then
+		return { ok = false }
+	end
+	if key == "room" then
+		return Actions.buyRoom(player, data)
+	end
+	local up = tonumber(string.match(key, "^up:(%d+)$") or "")
+	if up then
+		return Actions.upgradeRoom(player, data, { room = up })
+	end
+	local fid = string.match(key, "^fac:(.+)$")
+	if fid then
+		return Actions.buyFacility(player, data, { id = fid })
+	end
+	return { ok = false }
+end
+
+-- build mode: paint an area's walls / floor / roof
+function Actions.paint(player, data, args)
+	local area = typeof(args.area) == "string" and House.validArea(data, args.area)
+	local surfacePart = args.part
+	if not area or typeof(surfacePart) ~= "string" or not table.find(area.parts, surfacePart) then
+		return { ok = false }
+	end
+	local style = typeof(args.style) == "string" and Config.StyleById[surfacePart][args.style]
+	if not style then
+		return { ok = false }
+	end
+	if House.style(data, area.key, surfacePart).id == style.id then
+		return { ok = true }
+	end
+	if not spend(data, style.cost) then
+		return { ok = false, err = "Not enough cash!" }
+	end
+	data.styles[area.key] = data.styles[area.key] or {}
+	data.styles[area.key][surfacePart] = style.id
+	return { ok = true }
+end
+
+-- your room: buy a piece of furniture, or show/hide one you own
+function Actions.furniture(player, data, args)
+	local f = typeof(args.id) == "string" and Config.FurnitureById[args.id]
+	if not f then
+		return { ok = false }
+	end
+	local owned = data.furniture[f.id]
+	if owned == nil then
+		if not spend(data, f.cost) then
+			return { ok = false, err = "Not enough cash!" }
+		end
+		data.furniture[f.id] = true
+	else
+		data.furniture[f.id] = not owned
+	end
+	return { ok = true }
+end
+
+function Actions.home(player)
+	local s = session[player]
+	if not s or not s.plot or not player.Character then
+		return { ok = false }
+	end
+	if not s.plot.rooms then
+		PlotService.Render(s.plot, DataService.Get(player), s.totals)
+	end
+	player.Character:PivotTo(PlotService.MyRoomCFrame(s.plot))
 	return { ok = true }
 end
 
 function Actions.like(player, data, args)
 	local target = typeof(args.userId) == "number" and Players:GetPlayerByUserId(args.userId)
 	if not target or target == player then
-		return { ok = false, err = "You can't like your own school 😉" }
+		return { ok = false, err = "You can't like your own house 😉" }
 	end
 	local key = "u" .. target.UserId
 	if os.time() - (data.likedAt[key] or 0) < Config.LikeCooldown then
-		return { ok = false, err = "You already liked this school today!" }
+		return { ok = false, err = "You already liked this house today!" }
 	end
 	local tdata = DataService.Get(target)
 	if not tdata then
@@ -417,7 +501,7 @@ function Actions.like(player, data, args)
 	-- being liked pays: one minute of the target's income
 	local bonus = math.max(100, math.floor((session[target].totals and session[target].totals.income or 0) * 60))
 	tdata.cash += bonus
-	notify(target, string.format("❤ %s liked your school! +$%s", player.DisplayName, SchoolMath.format(bonus)), "like")
+	notify(target, string.format("❤ %s liked your house! +$%s", player.DisplayName, SchoolMath.format(bonus)), "like")
 	-- liker gets a small tip so liking feels good
 	data.cash += 50
 	pushState(target)
@@ -444,7 +528,7 @@ function Actions.tutorialDone(player, data)
 	return { ok = true }
 end
 
-local NO_STATE_PUSH = { visit = true }
+local NO_STATE_PUSH = { visit = true, home = true }
 local cooldown = {}
 
 ActionFn.OnServerInvoke = function(player, action, args)
@@ -584,7 +668,7 @@ local function onPlayerAdded(player)
 	end
 	local plot = PlotService.Claim(player)
 	if not plot then
-		player:Kick("This server is full of schools! Please join another server.")
+		player:Kick("This server is full! Please join another server.")
 		return
 	end
 
@@ -612,10 +696,14 @@ local function onPlayerAdded(player)
 	end
 	data.lastOnline = os.time()
 
+	-- you live here: spawn in your own room once the house is built
 	local function onCharacter(char)
-		task.wait(0.2)
+		local start = os.clock()
+		repeat
+			task.wait(0.2)
+		until plot.rooms or os.clock() - start > 5
 		if char.Parent then
-			char:PivotTo(PlotService.SpawnCFrame(plot))
+			char:PivotTo(plot.rooms and PlotService.MyRoomCFrame(plot) or PlotService.SpawnCFrame(plot))
 		end
 	end
 	player.CharacterAdded:Connect(onCharacter)

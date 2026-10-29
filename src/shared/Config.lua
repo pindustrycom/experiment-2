@@ -157,10 +157,14 @@ Config.DailyFreeBanner = "honors"
 Config.DailyCooldown = 20 * 3600
 
 ---------------------------------------------------------------------------
--- Building: rooms, floors, upgrades
+-- The house: dorm rooms, upgrades
+-- Everything lives in one walkable house. Each floor has a hallway with
+-- rooms on both sides (Config.SlotsPerFloor). Your own room and the common
+-- room take the first two slots, then dorms and facility rooms fill the
+-- house in the order you build them.
 ---------------------------------------------------------------------------
-Config.RoomsPerFloor = 4
-Config.MaxFloors = 10
+Config.SlotsPerFloor = 12
+Config.MaxRooms = 40 -- dorm rooms
 Config.StartingRooms = 2
 
 function Config.RoomUnlockCost(index)
@@ -185,22 +189,99 @@ function Config.RoomUpgradeCost(index, toTier)
 end
 
 ---------------------------------------------------------------------------
--- Facilities (one-time purchases that boost everyone or a personality)
+-- Facilities: rooms inside the house that boost everyone or a personality.
+-- Bought from the storyboard in your room.
 ---------------------------------------------------------------------------
 Config.Facilities = {
-	{ id = "cafeteria", name = "Cafeteria", cost = 2000, all = 5, text = "+5 mood for everyone", color = Color3.fromRGB(255, 160, 80) },
-	{ id = "library", name = "Library", cost = 6000, boost = { Nerd = 10, Royal = 4 }, text = "+10 Nerds, +4 Royals", color = Color3.fromRGB(120, 80, 50) },
-	{ id = "gym", name = "Gym", cost = 6000, boost = { Jock = 10, Rebel = 4 }, text = "+10 Jocks, +4 Rebels", color = Color3.fromRGB(200, 60, 60) },
-	{ id = "arcade", name = "Arcade", cost = 12000, boost = { Gamer = 10, Prankster = 6 }, text = "+10 Gamers, +6 Pranksters", color = Color3.fromRGB(60, 220, 200) },
-	{ id = "artstudio", name = "Art Studio", cost = 12000, boost = { Artist = 10, Rebel = 4 }, text = "+10 Artists, +4 Rebels", color = Color3.fromRGB(240, 140, 200) },
-	{ id = "musichall", name = "Music Hall", cost = 30000, boost = { Musician = 10, Artist = 4 }, text = "+10 Musicians, +4 Artists", color = Color3.fromRGB(150, 80, 220) },
-	{ id = "pool", name = "Swimming Pool", cost = 80000, all = 3, incomeMult = 0.15, text = "+3 mood, +15% income", color = Color3.fromRGB(60, 160, 255) },
-	{ id = "ballroom", name = "Grand Ballroom", cost = 200000, boost = { Royal = 12, Musician = 4 }, text = "+12 Royals, +4 Musicians", color = Color3.fromRGB(250, 210, 100) },
-	{ id = "observatory", name = "Observatory", cost = 1000000, all = 5, incomeMult = 0.3, text = "+5 mood, +30% income", color = Color3.fromRGB(70, 60, 140) },
+	{ id = "cafeteria", name = "Cafeteria", emoji = "🍕", cost = 2000, all = 5, text = "+5 mood for everyone", color = Color3.fromRGB(255, 160, 80) },
+	{ id = "library", name = "Library", emoji = "📚", cost = 6000, boost = { Nerd = 10, Royal = 4 }, text = "+10 Nerds, +4 Royals", color = Color3.fromRGB(120, 80, 50) },
+	{ id = "gym", name = "Gym", emoji = "🏋", cost = 6000, boost = { Jock = 10, Rebel = 4 }, text = "+10 Jocks, +4 Rebels", color = Color3.fromRGB(200, 60, 60) },
+	{ id = "arcade", name = "Arcade", emoji = "🕹", cost = 12000, boost = { Gamer = 10, Prankster = 6 }, text = "+10 Gamers, +6 Pranksters", color = Color3.fromRGB(60, 220, 200) },
+	{ id = "artstudio", name = "Art Studio", emoji = "🎨", cost = 12000, boost = { Artist = 10, Rebel = 4 }, text = "+10 Artists, +4 Rebels", color = Color3.fromRGB(240, 140, 200) },
+	{ id = "musichall", name = "Music Hall", emoji = "🎹", cost = 30000, boost = { Musician = 10, Artist = 4 }, text = "+10 Musicians, +4 Artists", color = Color3.fromRGB(150, 80, 220) },
+	{ id = "pool", name = "Swimming Pool", emoji = "🏊", cost = 80000, all = 3, incomeMult = 0.15, text = "+3 mood, +15% income", color = Color3.fromRGB(60, 160, 255) },
+	{ id = "ballroom", name = "Grand Ballroom", emoji = "💃", cost = 200000, boost = { Royal = 12, Musician = 4 }, text = "+12 Royals, +4 Musicians", color = Color3.fromRGB(250, 210, 100) },
+	{ id = "observatory", name = "Observatory", emoji = "🔭", cost = 1000000, all = 5, incomeMult = 0.3, text = "+5 mood, +30% income", color = Color3.fromRGB(70, 60, 140) },
 }
 Config.FacilityById = {}
 for _, f in ipairs(Config.Facilities) do
 	Config.FacilityById[f.id] = f
+end
+
+---------------------------------------------------------------------------
+-- Build mode materials (Sims-style). Paint any room's walls and floor, the
+-- outside walls and the roof. Each coat costs `cost`. In dorm rooms, `decor`
+-- adds satisfaction for everyone living there (walls + floor stack).
+-- `material` is an Enum.Material name.
+---------------------------------------------------------------------------
+Config.WallStyles = {
+	{ id = "cream", name = "Cream Paint", material = "SmoothPlastic", color = Color3.fromRGB(235, 225, 200), cost = 0, decor = 0 },
+	{ id = "sky", name = "Sky Paint", material = "SmoothPlastic", color = Color3.fromRGB(180, 215, 240), cost = 50, decor = 0 },
+	{ id = "mint", name = "Mint Paint", material = "SmoothPlastic", color = Color3.fromRGB(185, 235, 205), cost = 50, decor = 0 },
+	{ id = "blush", name = "Blush Paint", material = "SmoothPlastic", color = Color3.fromRGB(245, 200, 215), cost = 50, decor = 0 },
+	{ id = "plaster", name = "Plaster", material = "Plaster", color = Color3.fromRGB(240, 238, 230), cost = 250, decor = 1 },
+	{ id = "redbrick", name = "Red Brick", material = "Brick", color = Color3.fromRGB(170, 80, 60), cost = 400, decor = 1 },
+	{ id = "whitebrick", name = "White Brick", material = "Brick", color = Color3.fromRGB(230, 225, 220), cost = 600, decor = 2 },
+	{ id = "woodpanel", name = "Wood Panels", material = "WoodPlanks", color = Color3.fromRGB(160, 110, 70), cost = 1200, decor = 2 },
+	{ id = "stone", name = "Castle Stone", material = "Slate", color = Color3.fromRGB(140, 140, 150), cost = 3000, decor = 3 },
+	{ id = "velvet", name = "Velvet Wallpaper", material = "Fabric", color = Color3.fromRGB(120, 30, 60), cost = 8000, decor = 4 },
+	{ id = "marble", name = "Marble", material = "Marble", color = Color3.fromRGB(240, 240, 245), cost = 25000, decor = 5 },
+	{ id = "gold", name = "Gold Leaf", material = "Foil", color = Color3.fromRGB(240, 200, 90), cost = 120000, decor = 7 },
+}
+Config.FloorStyles = {
+	{ id = "oak", name = "Oak Boards", material = "WoodPlanks", color = Color3.fromRGB(196, 160, 120), cost = 0, decor = 0 },
+	{ id = "walnut", name = "Walnut Boards", material = "WoodPlanks", color = Color3.fromRGB(120, 80, 50), cost = 150, decor = 0 },
+	{ id = "bluecarpet", name = "Blue Carpet", material = "Carpet", color = Color3.fromRGB(70, 100, 170), cost = 300, decor = 1 },
+	{ id = "pinkcarpet", name = "Pink Carpet", material = "Carpet", color = Color3.fromRGB(230, 150, 190), cost = 300, decor = 1 },
+	{ id = "tiles", name = "Checker Tiles", material = "CeramicTiles", color = Color3.fromRGB(230, 230, 235), cost = 700, decor = 1 },
+	{ id = "cobble", name = "Cobblestone", material = "Cobblestone", color = Color3.fromRGB(150, 145, 140), cost = 1200, decor = 2 },
+	{ id = "granite", name = "Granite", material = "Granite", color = Color3.fromRGB(90, 90, 100), cost = 4000, decor = 3 },
+	{ id = "marble", name = "Marble", material = "Marble", color = Color3.fromRGB(235, 235, 240), cost = 20000, decor = 4 },
+	{ id = "night", name = "Starry Night", material = "Glass", color = Color3.fromRGB(25, 25, 50), cost = 90000, decor = 6 },
+}
+Config.RoofStyles = {
+	{ id = "red", name = "Red Shingles", material = "RoofShingles", color = Color3.fromRGB(170, 60, 50), cost = 0 },
+	{ id = "slate", name = "Slate Shingles", material = "RoofShingles", color = Color3.fromRGB(70, 75, 90), cost = 300 },
+	{ id = "green", name = "Green Shingles", material = "RoofShingles", color = Color3.fromRGB(70, 130, 80), cost = 300 },
+	{ id = "clay", name = "Clay Tiles", material = "ClayRoofTiles", color = Color3.fromRGB(200, 110, 70), cost = 1500 },
+	{ id = "copper", name = "Copper", material = "Metal", color = Color3.fromRGB(90, 170, 150), cost = 10000 },
+}
+Config.StyleLists = { wall = Config.WallStyles, floor = Config.FloorStyles, roof = Config.RoofStyles }
+Config.StyleById = {}
+for kind, list in pairs(Config.StyleLists) do
+	Config.StyleById[kind] = {}
+	for _, st in ipairs(list) do
+		Config.StyleById[kind][st.id] = st
+	end
+end
+-- default look per area when the player never painted it
+Config.DefaultStyles = {
+	exterior = { wall = "redbrick", roof = "red" },
+	hall = { wall = "cream", floor = "oak" },
+	me = { wall = "sky", floor = "bluecarpet" },
+	common = { wall = "mint", floor = "walnut" },
+	dorm = { wall = "cream", floor = "oak" },
+	facility = { wall = "plaster", floor = "tiles" },
+}
+
+---------------------------------------------------------------------------
+-- Your own room. Furniture is bought once and can be hidden/shown for free.
+-- Each piece makes the whole school a little more productive (+income).
+---------------------------------------------------------------------------
+Config.Furniture = {
+	{ id = "rug", name = "Round Rug", emoji = "🟣", cost = 200, incomeMult = 0.01 },
+	{ id = "plant", name = "Potted Plant", emoji = "🪴", cost = 350, incomeMult = 0.01 },
+	{ id = "lamp", name = "Floor Lamp", emoji = "💡", cost = 600, incomeMult = 0.01 },
+	{ id = "desk", name = "Headmaster's Desk", emoji = "🗄", cost = 1500, incomeMult = 0.02 },
+	{ id = "bookshelf", name = "Bookshelf", emoji = "📚", cost = 4000, incomeMult = 0.02 },
+	{ id = "beanbag", name = "Beanbag", emoji = "🛋", cost = 8000, incomeMult = 0.02 },
+	{ id = "gaming", name = "Gaming Setup", emoji = "🎮", cost = 25000, incomeMult = 0.03 },
+	{ id = "aquarium", name = "Aquarium", emoji = "🐠", cost = 75000, incomeMult = 0.04 },
+	{ id = "trophy", name = "Trophy Cabinet", emoji = "🏆", cost = 250000, incomeMult = 0.05 },
+}
+Config.FurnitureById = {}
+for _, f in ipairs(Config.Furniture) do
+	Config.FurnitureById[f.id] = f
 end
 
 ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ local player = Players.LocalPlayer
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared:WaitForChild("Config"))
 local SchoolMath = require(Shared:WaitForChild("SchoolMath"))
+local House = require(Shared:WaitForChild("House"))
 local UI = require(script.Parent:WaitForChild("UI"))
 local C = UI.Colors
 local fmt = SchoolMath.format
@@ -171,7 +172,12 @@ end
 menuButton("enroll", "🎓 Enroll", C.purple)
 menuButton("rooms", "🛏 Rooms", C.blue)
 menuButton("students", "👥 Students", Color3.fromRGB(60, 190, 170))
-menuButton("build", "🏗 Build", Color3.fromRGB(240, 140, 60))
+menuButton("design", "🎨 Build", Color3.fromRGB(240, 140, 60))
+UI.button(menu, "🏠 My Room", Color3.fromRGB(90, 120, 200), function()
+	SFX.click()
+	openPanel(nil)
+	call("home")
+end, { Size = UDim2.fromOffset(120, 50), TextSize = 19 })
 menuButton("visit", "🗺 Visit", C.pink)
 local dailyButton = menuButton("daily", "🎁 Daily", C.gold)
 local inviteButton = UI.button(menu, "📣 Invite", C.green, function()
@@ -488,22 +494,23 @@ local function renderRoom(index)
 		return Render.rooms()
 	end
 	local tier = Config.RoomTiers[room.tier]
-	local stats = SchoolMath.room(d, room.tier, room.occupants, State.mult)
+	local stats = SchoolMath.room(d, index, room.occupants, State.mult)
+	local decor = tier.decor + House.roomDecor(d, index)
 	panelTitle.Text = string.format("🛏 Room %d • %s", index, tier.name)
 	resetLayout("list")
 	UI.button(toolbar, "← All rooms", C.card, function()
 		panelState.room = nil
 		openPanel("rooms")
 	end, { Size = UDim2.fromOffset(130, 40) })
-	local nextCost = Config.RoomUpgradeCost(index, room.tier + 1)
-	if nextCost then
-		local nt = Config.RoomTiers[room.tier + 1]
-		UI.button(toolbar, string.format("⬆ %s $%s", nt.name, fmt(nextCost)), d.cash >= nextCost and C.green or Color3.fromRGB(110, 110, 120), function()
-			result(call("upgradeRoom", { room = index }), "Room upgraded! 🎉")
-		end, { Size = UDim2.fromOffset(250, 40), TextSize = 16 })
+	UI.button(toolbar, "🎨 Decorate", Color3.fromRGB(240, 140, 60), function()
+		panelState.area = "r" .. index
+		openPanel("design")
+	end, { Size = UDim2.fromOffset(140, 40) })
+	if Config.RoomTiers[room.tier + 1] then
+		UI.text(toolbar, "⬆ Upgrades are pinned on the storyboard in your room", 14, C.sub, { Size = UDim2.fromOffset(240, 40) })
 	end
 
-	UI.text(scroll, string.format("%s Satisfaction <b>%d%%</b>   💰 <b>$%s/s</b>   🛏 %d/%d beds   🎀 decor +%d", SchoolMath.moodEmoji(stats.satisfaction), math.floor(stats.satisfaction), fmt(stats.income), #room.occupants, tier.beds, tier.decor), 18, C.text, { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26) })
+	UI.text(scroll, string.format("%s Satisfaction <b>%d%%</b>   💰 <b>$%s/s</b>   🛏 %d/%d beds   🎀 decor +%d", SchoolMath.moodEmoji(stats.satisfaction), math.floor(stats.satisfaction), fmt(stats.income), #room.occupants, tier.beds, decor), 18, C.text, { LayoutOrder = 1, Size = UDim2.new(1, 0, 0, 26) })
 
 	-- beds
 	local bedRow = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 2, Parent = scroll })
@@ -555,7 +562,7 @@ local function renderRoom(index)
 			if where ~= index then
 				local trial = table.clone(room.occupants)
 				table.insert(trial, uid)
-				local preview = SchoolMath.room(d, room.tier, trial, State.mult)
+				local preview = SchoolMath.room(d, index, trial, State.mult)
 				table.insert(options, { uid = uid, s = s, where = where, preview = preview })
 			end
 		end
@@ -596,19 +603,13 @@ function Render.rooms()
 	UI.button(toolbar, "⚡ Auto-Arrange", C.purple, function()
 		result(call("autoArrange"), "Students rearranged for max income!")
 	end, { Size = UDim2.fromOffset(170, 40) })
-	local nextIndex = #d.rooms + 1
-	if nextIndex <= Config.RoomsPerFloor * Config.MaxFloors then
-		local cost = Config.RoomUnlockCost(nextIndex)
-		UI.button(toolbar, "🔨 New Room $" .. fmt(cost), d.cash >= cost and C.green or Color3.fromRGB(110, 110, 120), function()
-			result(call("buyRoom"), "New room built! 🏠")
-		end, { Size = UDim2.fromOffset(200, 40) })
-	end
+	UI.text(toolbar, "🔨 New rooms are pinned on the storyboard in your room", 14, C.sub, { Size = UDim2.fromOffset(260, 40) })
 	for i, room in ipairs(d.rooms) do
 		local tier = Config.RoomTiers[room.tier]
-		local stats = SchoolMath.room(d, room.tier, room.occupants, State.mult)
+		local stats = SchoolMath.room(d, i, room.occupants, State.mult)
 		local f = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 74), LayoutOrder = i })
 		UI.pad(f, 10)
-		local floor = math.ceil(i / Config.RoomsPerFloor)
+		local floor = House.floorOf(d, "r" .. i)
 		UI.text(f, string.format("Room %d  <font color=\"#bbb6dc\">Floor %d • %s</font>", i, floor, tier.name), 20, C.text, { Size = UDim2.new(0.7, 0, 0, 26) })
 		local names = {}
 		for _, uid in ipairs(room.occupants) do
@@ -702,44 +703,123 @@ function Render.students()
 	end
 end
 
-function Render.build()
+-- the storyboard on the wall of your room: every build is a sticky note
+function Render.storyboard()
 	local d = State.data
-	panelTitle.Text = "🏗 Build & Expand"
-	resetLayout("list")
-	local nextIndex = #d.rooms + 1
-	if nextIndex <= Config.RoomsPerFloor * Config.MaxFloors then
-		local cost = Config.RoomUnlockCost(nextIndex)
-		local newFloor = nextIndex % Config.RoomsPerFloor == 1
-		UI.button(toolbar, (newFloor and "🏢 New Floor! $" or "🔨 New Room $") .. fmt(cost), d.cash >= cost and C.green or Color3.fromRGB(110, 110, 120), function()
-			result(call("buyRoom"), newFloor and "A whole new floor! 🏢" or "New room built! 🏠")
-		end, { Size = UDim2.fromOffset(240, 40) })
-	end
-	UI.text(scroll, string.format("Your school: <b>%d rooms</b> on <b>%d floors</b> (max %d floors)", #d.rooms, math.ceil(#d.rooms / Config.RoomsPerFloor), Config.MaxFloors), 17, C.sub, { Size = UDim2.new(1, 0, 0, 24) })
-	for i, fac in ipairs(Config.Facilities) do
-		local owned = d.facilities[fac.id]
-		local f = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 64), LayoutOrder = i, BackgroundColor3 = owned and fac.color:Lerp(C.card, 0.6) or C.card })
-		UI.stroke(f, fac.color, 2)
+	panelTitle.Text = "📌 School Plans"
+	resetLayout("grid", UDim2.fromOffset(180, 170))
+	UI.text(toolbar, string.format("🏠 %d dorm rooms on %d floors (max %d rooms)", #d.rooms, House.floorCount(d), Config.MaxRooms), 16, C.sub, { Size = UDim2.fromOffset(420, 40) })
+	local notes = House.notes(d)
+	for i, n in ipairs(notes) do
+		local paper = House.NoteColors[n.kind]
+		local f = UI.card(scroll, { LayoutOrder = i, BackgroundColor3 = paper })
+		f.Rotation = ((i * 37) % 7 - 3) * 0.6
+		local highlight = panelState.note == n.key
+		UI.stroke(f, highlight and C.red or Color3.fromRGB(120, 100, 60), highlight and 4 or 1)
 		UI.pad(f, 10)
-		UI.text(f, fac.name, 20, C.text, { Size = UDim2.new(0.6, 0, 0, 24) })
-		UI.text(f, fac.text, 15, C.sub, { Position = UDim2.fromOffset(0, 24), Size = UDim2.new(0.6, 0, 0, 20) })
-		if owned then
-			UI.text(f, "✅ Built", 18, C.green, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(150, 30), TextXAlignment = Enum.TextXAlignment.Right })
-		else
-			UI.button(f, "Build $" .. fmt(fac.cost), d.cash >= fac.cost and C.green or Color3.fromRGB(110, 110, 120), function()
-				result(call("buyFacility", { id = fac.id }), fac.name .. " built! 🎉")
-			end, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(150, 40) })
+		local ink = Color3.fromRGB(50, 40, 40)
+		UI.text(f, "📍", 18, C.text, { AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, -14), Size = UDim2.fromOffset(24, 24), TextXAlignment = Enum.TextXAlignment.Center })
+		UI.text(f, n.emoji .. " " .. n.title, 18, ink, { Position = UDim2.fromOffset(0, 6), Size = UDim2.new(1, 0, 0, 44), TextStrokeTransparency = 1 })
+		UI.text(f, n.text, 13, Color3.fromRGB(90, 80, 80), { Position = UDim2.fromOffset(0, 52), Size = UDim2.new(1, 0, 0, 40) })
+		local afford = d.cash >= n.cost
+		smallButton(f, "Do it! $" .. fmt(n.cost), afford and C.green or Color3.fromRGB(130, 130, 140), function()
+			local res = call("note", { key = n.key })
+			if result(res, (n.newFloor and "🏗 A whole new floor! " or "✅ ") .. n.title .. " done!") then
+				panelState.note = nil
+			end
+		end)
+	end
+	if #notes == 0 then
+		UI.text(scroll, "🎉 Everything is built. You run the fanciest house in town!", 18, C.gold)
+	end
+end
+
+-- Build mode: paint walls/floors/roof of any area, furnish your own room
+local function swatches(kind, area, current)
+	local list = Config.StyleLists[kind]
+	local grid = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Parent = scroll })
+	UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(118, 104), CellPadding = UDim2.fromOffset(8, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = grid })
+	for i, st in ipairs(list) do
+		local chosen = current.id == st.id
+		local b = UI.button(grid, "", st.color, function()
+			if chosen then
+				return
+			end
+			result(call("paint", { area = area, part = kind, style = st.id }), st.cost > 0 and (st.name .. " applied! -$" .. fmt(st.cost)) or nil)
+		end, { LayoutOrder = i, Size = UDim2.fromOffset(118, 104) })
+		local stroke = b:FindFirstChildOfClass("UIStroke")
+		stroke.Color = chosen and C.gold or Color3.new(0, 0, 0)
+		stroke.Thickness = chosen and 4 or 2
+		stroke.Transparency = 0
+		local tag = UI.new("Frame", { BackgroundColor3 = C.bg, BackgroundTransparency = 0.2, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 46), Parent = b })
+		UI.corner(tag, 8)
+		UI.text(tag, st.name, 13, C.text, { Size = UDim2.new(1, -8, 0, 20), Position = UDim2.fromOffset(4, 2), TextXAlignment = Enum.TextXAlignment.Center })
+		local info = chosen and "✓ current" or (st.cost == 0 and "free" or ("$" .. fmt(st.cost)))
+		if st.decor and st.decor > 0 and kind ~= "roof" then
+			info ..= "  🎀+" .. st.decor
+		end
+		UI.text(tag, info, 12, chosen and C.gold or C.green, { Size = UDim2.new(1, -8, 0, 18), Position = UDim2.fromOffset(4, 24), TextXAlignment = Enum.TextXAlignment.Center })
+	end
+	return grid
+end
+
+function Render.design()
+	local d = State.data
+	panelTitle.Text = "🎨 Build Mode"
+	resetLayout("list")
+	local areas = House.areas(d)
+	local area = House.validArea(d, panelState.area or "") or areas[3]
+	panelState.area = area.key
+	UI.text(toolbar, "Pick a part of your house, then a material. 🎀 decor in dorm rooms makes students happier.", 14, C.sub, { Size = UDim2.new(1, 0, 1, 0) })
+
+	local picker = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 1, Parent = scroll })
+	UI.new("UIGridLayout", { CellSize = UDim2.fromOffset(150, 36), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = picker })
+	for i, a in ipairs(areas) do
+		UI.button(picker, a.name, a.key == area.key and C.purple or C.card, function()
+			panelState.area = a.key
+			openPanel("design")
+		end, { LayoutOrder = i, TextSize = 15 })
+	end
+
+	local order = 2
+	local names = { wall = "🧱 Walls", floor = "🟫 Floor", roof = "🏠 Roof" }
+	for _, kind in ipairs(area.parts) do
+		UI.text(scroll, string.format("<b>%s</b> — %s", names[kind], area.name), 20, C.gold, { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 28) })
+		swatches(kind, area.key, House.style(d, area.key, kind)).LayoutOrder = order + 1
+		order += 2
+	end
+
+	if area.key == "me" then
+		UI.text(scroll, "<b>🛋 Furniture</b> — every piece gives your whole house a small income boost", 20, C.gold, { LayoutOrder = order, Size = UDim2.new(1, 0, 0, 28) })
+		for i, f in ipairs(Config.Furniture) do
+			local owned = d.furniture[f.id]
+			local card = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 54), LayoutOrder = order + i })
+			UI.pad(card, 8)
+			UI.text(card, f.emoji .. " " .. f.name, 18, C.text, { Size = UDim2.new(0.6, 0, 0, 22) })
+			UI.text(card, string.format("+%d%% income", math.floor(f.incomeMult * 100 + 0.5)), 14, C.green, { Position = UDim2.fromOffset(0, 22), Size = UDim2.new(0.6, 0, 0, 18) })
+			local text, color
+			if owned == nil then
+				text, color = "Buy $" .. fmt(f.cost), d.cash >= f.cost and C.green or Color3.fromRGB(110, 110, 120)
+			elseif owned then
+				text, color = "Hide", C.card
+			else
+				text, color = "Place", C.blue
+			end
+			UI.button(card, text, color, function()
+				result(call("furniture", { id = f.id }), owned == nil and (f.name .. " added to your room!") or nil)
+			end, { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(130, 36) })
 		end
 	end
 end
 
 function Render.visit()
-	panelTitle.Text = "🗺 Visit Schools"
+	panelTitle.Text = "🗺 Visit Houses"
 	resetLayout("list")
 	UI.button(toolbar, "🏠 Go Home", C.blue, function()
 		call("visit", {})
 		openPanel(nil)
 	end, { Size = UDim2.fromOffset(140, 40) })
-	UI.text(scroll, "Visit other schools, steal ideas, and leave a ❤ — every like pays the owner a minute of income!", 16, C.sub, { Size = UDim2.new(1, 0, 0, 44) })
+	UI.text(scroll, "Visit other houses, steal decorating ideas, and leave a ❤ — every like pays the owner a minute of income!", 16, C.sub, { Size = UDim2.new(1, 0, 0, 44) })
 	local plots = workspace:FindFirstChild("BSTWorld")
 	local count = 0
 	for _, other in ipairs(Players:GetPlayers()) do
@@ -747,7 +827,7 @@ function Render.visit()
 			count += 1
 			local f = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 60), LayoutOrder = count })
 			UI.pad(f, 10)
-			UI.text(f, other.DisplayName .. "'s Academy", 20, C.text, { Size = UDim2.new(0.5, 0, 0, 24) })
+			UI.text(f, other.DisplayName .. "'s House", 20, C.text, { Size = UDim2.new(0.5, 0, 0, 24) })
 			local ls = other:FindFirstChild("leaderstats")
 			local inc = ls and ls:FindFirstChild("Income")
 			local likes = ls and ls:FindFirstChild("Likes")
@@ -759,7 +839,7 @@ function Render.visit()
 				openPanel(nil)
 			end, { Size = UDim2.fromOffset(100, 40) })
 			UI.button(row, "❤ Like", C.pink, function()
-				result(call("like", { userId = other.UserId }), "❤ You liked " .. other.DisplayName .. "'s school! +$50")
+				result(call("like", { userId = other.UserId }), "❤ You liked " .. other.DisplayName .. "'s house! +$50")
 			end, { Size = UDim2.fromOffset(100, 40) })
 		end
 	end
@@ -836,6 +916,9 @@ openPanel = function(id)
 		if id ~= "rooms" then
 			panelState.room = nil
 		end
+		if id ~= "storyboard" then
+			panelState.note = nil
+		end
 		panelState.expel = nil
 		scroll.CanvasPosition = Vector2.zero
 	end
@@ -896,11 +979,12 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 	if first and not st.data.tutorialDone then
 		task.delay(1.5, function()
 			local steps = {
-				"🏫 Welcome, Headmaster! You own this boarding school.",
-				"🛏 Open <b>Rooms</b> and move your 2 students into a room. Housed students earn cash every second.",
+				"🏠 Welcome, Headmaster! This is your room. You live in this boarding house with your students.",
+				"🛏 Walk out into the hallway, go to a dorm door and press <b>E</b> (or open <b>Rooms</b>) to move your 2 students in. Housed students earn cash every second.",
 				"💞 Roommates have <b>chemistry</b>! Nerds + Gamers are besties, Royals hate Rebels. Happy rooms earn up to 2x more.",
 				"🎓 Use <b>Enroll</b> to recruit new students. Find Legendary & Mythic ones and shiny ✨ variants!",
-				"🏗 Spend cash on new rooms, floors and facilities to grow a MASSIVE school. Good luck!",
+				"📌 Your <b>storyboard</b> (the corkboard on your wall) holds every plan: new rooms, upgrades, a Gym, a Pool... Walk up to it and press <b>E</b>.",
+				"🎨 Use <b>Build</b> to pick materials for walls, floors and the roof, and to furnish your room. Nicer dorms = happier students!",
 			}
 			local box = UI.card(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -20), Size = UDim2.fromOffset(520, 110), BackgroundColor3 = C.bg })
 			UI.stroke(box, C.gold, 3)
@@ -974,7 +1058,7 @@ local announceToken = 0
 Remotes:WaitForChild("Announce").OnClientEvent:Connect(function(info)
 	local text
 	if info.floor then
-		text = string.format("🏢 %s's school just grew to %d floors!", info.player, info.floor)
+		text = string.format("🏢 %s's boarding house just grew to %d floors!", info.player, info.floor)
 	else
 		local color = Config.Rarities[info.rarity].color
 		announceBar.TextColor3 = color
@@ -1018,29 +1102,54 @@ local function hookClick(tag, fn)
 	end
 end
 
-hookClick("RoomClick", function(hit)
-	if hit:GetAttribute("OwnerUserId") ~= player.UserId then
-		return
-	end
-	panelState.room = hit:GetAttribute("RoomIndex")
-	local room = State.data and State.data.rooms[panelState.room]
+local function openRoom(index)
+	panelState.room = index
+	local room = State.data and State.data.rooms[index]
 	panelState.picking = room and #room.occupants < Config.RoomTiers[room.tier].beds
 	SFX.click()
 	openPanel("rooms")
+end
+
+hookClick("RoomClick", function(plate)
+	if plate:GetAttribute("OwnerUserId") == player.UserId then
+		openRoom(plate:GetAttribute("RoomIndex"))
+	end
 end)
 
-hookClick("BuyRoomClick", function(box)
-	if box:GetAttribute("OwnerUserId") ~= player.UserId then
+hookClick("NoteClick", function(note)
+	if note:GetAttribute("OwnerUserId") ~= player.UserId then
 		return
 	end
-	result(call("buyRoom"), "New room built! 🏠")
+	panelState.note = note:GetAttribute("NoteKey")
+	SFX.click()
+	openPanel("storyboard")
 end)
 
-hookClick("BuyFacilityClick", function(hit)
-	if hit:GetAttribute("OwnerUserId") ~= player.UserId then
-		return
+-- prompts only work in your own house
+local function hookPrompt(tag, fn)
+	local function hook(pp)
+		if pp:GetAttribute("OwnerUserId") ~= player.UserId then
+			pp.Enabled = false
+			return
+		end
+		pp.Triggered:Connect(function()
+			fn(pp)
+		end)
 	end
-	openPanel("build")
+	CollectionService:GetInstanceAddedSignal(tag):Connect(hook)
+	for _, pp in ipairs(CollectionService:GetTagged(tag)) do
+		hook(pp)
+	end
+end
+
+hookPrompt("RoomPrompt", function(pp)
+	openRoom(pp:GetAttribute("RoomIndex"))
+end)
+
+hookPrompt("StoryboardPrompt", function()
+	panelState.note = nil
+	SFX.click()
+	openPanel("storyboard")
 end)
 
 local function hookLike(prompt)
@@ -1050,7 +1159,7 @@ local function hookLike(prompt)
 	end
 	prompt.Triggered:Connect(function()
 		local owner = Players:GetPlayerByUserId(prompt:GetAttribute("OwnerUserId"))
-		result(call("like", { userId = prompt:GetAttribute("OwnerUserId") }), "❤ You liked " .. (owner and owner.DisplayName or "this") .. "'s school! +$50")
+		result(call("like", { userId = prompt:GetAttribute("OwnerUserId") }), "❤ You liked " .. (owner and owner.DisplayName or "this") .. "'s house! +$50")
 	end)
 end
 CollectionService:GetInstanceAddedSignal("LikePrompt"):Connect(hookLike)

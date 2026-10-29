@@ -1,6 +1,7 @@
 -- Pure functions for satisfaction + income. Shared so the client can preview
 -- exactly what the server will calculate (e.g. "how would this roommate do?").
 local Config = require(script.Parent.Config)
+local House = require(script.Parent.House)
 
 local SchoolMath = {}
 
@@ -28,16 +29,26 @@ local function facilityBonus(data, personality)
 	return mood, mult
 end
 
+-- facilities + the furniture in your own room
 function SchoolMath.facilityIncomeMult(data)
 	local _, mult = facilityBonus(data, "")
+	for fid in pairs(data.furniture or {}) do
+		local f = Config.FurnitureById[fid]
+		if f then
+			mult += f.incomeMult or 0
+		end
+	end
 	return 1 + mult
 end
 
--- occupantUids: list of student uids living together. Returns
+-- index: room number in data.rooms. occupantUids: students living together
+-- (pass a modified list to preview a move). Returns
 -- { students = { [uid] = { sat, income } }, satisfaction, income }
-function SchoolMath.room(data, tier, occupantUids, globalMult)
+function SchoolMath.room(data, index, occupantUids, globalMult)
 	globalMult = globalMult or 1
+	local tier = data.rooms[index] and data.rooms[index].tier or 1
 	local tierInfo = Config.RoomTiers[tier] or Config.RoomTiers[1]
+	local decor = tierInfo.decor + House.roomDecor(data, index)
 	local defs = {}
 	for _, uid in ipairs(occupantUids) do
 		local s = data.students[uid]
@@ -65,7 +76,7 @@ function SchoolMath.room(data, tier, occupantUids, globalMult)
 	local roommates = #defs - 1
 
 	for _, d in ipairs(defs) do
-		local sat = Config.BaseSatisfaction + tierInfo.decor
+		local sat = Config.BaseSatisfaction + decor
 		local fMood = facilityBonus(data, d.def.personality)
 		sat += fMood
 		for _, other in ipairs(defs) do
@@ -105,7 +116,7 @@ function SchoolMath.totals(data, globalMult)
 	local income, satSum, housed = 0, 0, 0
 	local rooms = {}
 	for i, room in ipairs(data.rooms) do
-		local r = SchoolMath.room(data, room.tier, room.occupants, globalMult)
+		local r = SchoolMath.room(data, i, room.occupants, globalMult)
 		rooms[i] = r
 		income += r.income
 		satSum += r.satisfaction * #room.occupants

@@ -43,9 +43,13 @@ function DataService.Default()
 		lastOnline = 0,
 		discovered = {}, -- [studentId] = true (collection book)
 		tutorialDone = false,
+		order = {}, -- build order of house slots: "r<i>" dorms, "fac:<id>" facilities
+		styles = {}, -- [area] = { wall = id, floor = id, roof = id } (build mode)
+		furniture = {}, -- [furnitureId] = true (shown) / false (owned, hidden)
 	}
-	for _ = 1, Config.StartingRooms do
+	for i = 1, Config.StartingRooms do
 		table.insert(data.rooms, { tier = 1, occupants = {} })
+		table.insert(data.order, "r" .. i)
 	end
 	-- Two free starter students so the loop makes sense immediately.
 	for _, id in ipairs({ "tim", "pete" }) do
@@ -79,6 +83,28 @@ local function reconcile(data)
 		end
 		room.occupants = kept
 	end
+	-- every room and facility needs exactly one slot in the house
+	local seen, order = {}, {}
+	for _, key in ipairs(data.order) do
+		local i = tonumber(string.match(key, "^r(%d+)$") or "")
+		local fid = string.match(key, "^fac:(.+)$")
+		local valid = (i and data.rooms[i]) or (fid and data.facilities[fid])
+		if valid and not seen[key] then
+			seen[key] = true
+			table.insert(order, key)
+		end
+	end
+	for i in ipairs(data.rooms) do
+		if not seen["r" .. i] then
+			table.insert(order, "r" .. i)
+		end
+	end
+	for _, f in ipairs(Config.Facilities) do
+		if data.facilities[f.id] and not seen["fac:" .. f.id] then
+			table.insert(order, "fac:" .. f.id)
+		end
+	end
+	data.order = order
 	return data
 end
 
