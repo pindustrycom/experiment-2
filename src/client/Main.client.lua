@@ -767,7 +767,7 @@ local TILE_COLORS = {
 	add = Color3.fromRGB(250, 225, 120),
 	remove = Color3.fromRGB(210, 90, 90),
 }
-local DIR_ARROWS = { "▲", "▶", "▼", "◀" } -- front of the house at the bottom of the map
+local DIR_ARROWS = { "▲", "◀", "▼", "▶" } -- front of the house at the bottom of the map; +x is on your left as you walk in
 
 local function cellLabel(p)
 	if p.kind == "me" then
@@ -861,7 +861,7 @@ function Render.layout()
 	local mapW, mapH = ts * House.W, ts * House.D
 	local map = UI.new("Frame", { BackgroundColor3 = C.bg, BorderSizePixel = 0, Size = UDim2.fromOffset(mapW, mapH), Parent = body })
 	local function at(x, z, w, h)
-		return UDim2.fromOffset(x * ts, (House.D - z - (h or 1)) * ts), UDim2.fromOffset((w or 1) * ts, (h or 1) * ts)
+		return UDim2.fromOffset((House.W - x - (w or 1)) * ts, (House.D - z - (h or 1)) * ts), UDim2.fromOffset((w or 1) * ts, (h or 1) * ts)
 	end
 
 	local owner, stair, well = House.owners(d, floor)
@@ -1026,7 +1026,7 @@ function Render.layout()
 			-- the door: a white bar on the room's edge
 			local door = d.layout[p.key].door
 			if door then
-				local cx = (door.x + 0.5 + door.dx * 0.5) * ts
+				local cx = (House.W - door.x - 0.5 - door.dx * 0.5) * ts
 				local cy = (House.D - door.z - 0.5 - door.dz * 0.5) * ts
 				local horizontal = door.dz ~= 0
 				UI.new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, BackgroundColor3 = Color3.new(1, 1, 1), Position = UDim2.fromOffset(cx, cy), Size = horizontal and UDim2.fromOffset(ts * 0.7, 4) or UDim2.fromOffset(4, ts * 0.7), ZIndex = 3, Parent = map })

@@ -4,7 +4,7 @@
 -- A house is one walkable building drawn from the player's floor plan
 -- (shared/House.lua): hallway tiles, rectangular rooms, stairs between floors,
 -- and floors that may hang out over supported ones. Plot-local axes: -Z is the
--- front (toward the plaza), +X is the right side when you walk in.
+-- front (toward the plaza), +X is on your left when you walk in (maps draw it mirrored).
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -1979,7 +1979,7 @@ local function layoutBoard(sg, data)
 			box(sg, gx, gy, tile * House.W, tile * House.D, Color3.fromRGB(235, 230, 220))
 			local function at(x, z, w, d)
 				-- front of the house (z = 0) at the bottom
-				return gx + x * tile, gy + (House.D - z - d) * tile, w * tile, d * tile
+				return gx + (House.W - x - w) * tile, gy + (House.D - z - d) * tile, w * tile, d * tile
 			end
 			local owner, stair = House.owners(data, f)
 			local hall = {}

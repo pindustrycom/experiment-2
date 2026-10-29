@@ -14,7 +14,7 @@
 --   * supports: data.plan.floors[f + 1].support. The floor above a supported
 --     floor may hang out up to House.Overhang tiles past it (columns hold it
 --     up); otherwise every floor has to sit on the floor below.
--- Tile (x, z) is 0-based; x runs left -> right, z runs front -> back.
+-- Tile (x, z) is 0-based; x runs right -> left as you walk in the front door, z runs front -> back.
 local Config = require(script.Parent.Config)
 
 local House = {}
