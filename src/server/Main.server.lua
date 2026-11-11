@@ -88,8 +88,11 @@ local function pushState(player)
 	end
 	recompute(player)
 	s.dirty = true
+	-- the audit log travels on its own (Actions.audit), not with every push
+	local view = table.clone(data)
+	view.audit = nil
 	StateEv:FireClient(player, {
-		data = data,
+		data = view,
 		income = s.totals.income,
 		satisfaction = s.totals.satisfaction,
 		mult = s.mult,
@@ -106,6 +109,100 @@ end
 
 local function notify(player, text, kind)
 	NotifyEv:FireClient(player, text, kind or "info")
+end
+
+---------------------------------------------------------------------------
+-- Audit log: every interaction between students, with the numbers behind it.
+-- Entries are small tables (k = kind, t = time, seq = running number); the
+-- wording lives in SchoolMath.auditLine so the 🔍 Audit panel and the wall
+-- board read the same. Students are stored as { uid, studentId } so an entry
+-- still makes sense after they leave.
+---------------------------------------------------------------------------
+local ROUTINE = { tick = true }
+
+local function ref(data, uid)
+	local s = data.students[uid]
+	return { uid, s and s.id or "?" }
+end
+
+local function refs(data, uids)
+	local list = {}
+	for _, uid in ipairs(uids) do
+		table.insert(list, ref(data, uid))
+	end
+	return list
+end
+
+local function round1(v)
+	return math.floor(v * 10 + 0.5) / 10
+end
+
+local function audit(data, entry)
+	data.auditSeq += 1
+	entry.seq = data.auditSeq
+	entry.t = os.time()
+	local log = data.audit
+	table.insert(log, entry)
+	if ROUTINE[entry.k] then
+		local routine = 0
+		for _, e in ipairs(log) do
+			if ROUTINE[e.k] then
+				routine += 1
+			end
+		end
+		local i = 1
+		while routine > Config.AuditRoutineKeep and i <= #log do
+			if ROUTINE[log[i].k] then
+				table.remove(log, i)
+				routine -= 1
+			else
+				i += 1
+			end
+		end
+	end
+	while #log > Config.AuditKeep do
+		table.remove(log, 1)
+	end
+end
+
+-- Change a bond and log it when the pair crosses into another level.
+-- cause: "room", "item:<living item>" or "out:<activity>:<outcome>".
+-- Returns how far the score really moved and the new level if it changed.
+local function addBond(data, a, b, delta, cause, info)
+	local key = Config.BondKey(a, b)
+	local before = data.bonds[key] or 0
+	local after = math.clamp(before + delta, Config.BondMin, Config.BondMax)
+	data.bonds[key] = after
+	local l0, l1 = Config.BondLevel(before), Config.BondLevel(after)
+	if l0 == l1 then
+		return after - before, nil
+	end
+	audit(data, { k = "level", a = ref(data, a), b = ref(data, b), s0 = round1(before), s1 = round1(after), d = round1(delta), c = cause, r = info and info.room, v = info and info.vibe })
+	return after - before, l1
+end
+
+-- the levels worth a toast: new rivals and the top two friendships
+local function bondNews(player, data, a, b, level)
+	if level.min >= 0 and level.min < 80 then
+		return
+	end
+	local da, db = Config.StudentById[data.students[a].id], Config.StudentById[data.students[b].id]
+	notify(player, string.format("%s %s and %s are now %s!", level.emoji, Config.ShortName(da), Config.ShortName(db), Config.BondName(level, da, db)), level.min < 0 and "error" or "cash")
+end
+
+-- who a student rooms with right now, with the vibe each roommate gets
+local function roommates(data, uid, roomIndex)
+	local list = {}
+	local occ = data.rooms[roomIndex].occupants
+	local def = Config.StudentById[data.students[uid].id]
+	for _, other in ipairs(occ) do
+		local s = other ~= uid and data.students[other]
+		if s then
+			local v = SchoolMath.roomVibe(data, occ, def, Config.StudentById[s.id])
+			table.insert(list, { s = ref(data, other), v = math.floor(v * 100 + 0.5) })
+		end
+	end
+	return list
 end
 
 -- Re-render dirty schools at most twice per second.
@@ -145,17 +242,31 @@ local function removeFromRoom(data, uid)
 	end
 end
 
--- take a student out of the house: rooms, friendships, mood buffs
-local function forget(data, uid)
+-- take a student out of the house: rooms, friendships, mood buffs.
+-- by: "expel" or "trade" (for the audit log)
+local function forget(data, uid, by)
+	local entry = { k = "leave", s = ref(data, uid), by = by, bonds = 0 }
 	removeFromRoom(data, uid)
-	data.students[uid] = nil
-	data.buffs[uid] = nil
-	for key in pairs(data.bonds) do
+	local best = nil
+	for key, score in pairs(data.bonds) do
 		local x, y = string.match(key, "^(.-)|(.*)$")
 		if x == uid or y == uid then
+			local other = x == uid and y or x
+			if score ~= 0 and data.students[other] then
+				entry.bonds += 1
+				if not best or math.abs(score) > math.abs(best.score) then
+					best = { uid = other, score = score }
+				end
+			end
 			data.bonds[key] = nil
 		end
 	end
+	if best then
+		entry.top = { s = ref(data, best.uid), level = Config.BondLevel(best.score).name }
+	end
+	data.students[uid] = nil
+	data.buffs[uid] = nil
+	audit(data, entry)
 end
 
 local function spend(data, amount)
@@ -230,14 +341,17 @@ local function roll(player, data, banner)
 	return { uid = uid, id = def.id, shiny = shiny, new = isNew }
 end
 
-local function doPulls(player, data, banner, count)
+local function doPulls(player, data, banner, count, by)
 	if countStudents(data) + count > Config.MaxStudents then
 		return nil, "Your roster is full! Expel some students first."
 	end
-	local results = {}
+	local results, joined = {}, {}
 	for _ = 1, count do
-		table.insert(results, roll(player, data, banner))
+		local r = roll(player, data, banner)
+		table.insert(results, r)
+		table.insert(joined, { r.uid, r.id })
 	end
+	audit(data, { k = "join", list = joined, by = by or "pull" })
 	return results
 end
 
@@ -245,6 +359,12 @@ end
 -- student's room by the income it adds, then try pairwise swaps.
 local function autoArrange(player, data)
 	local mult = session[player].mult
+	local before, was = SchoolMath.totals(data, mult), {}
+	for i, room in ipairs(data.rooms) do
+		for _, uid in ipairs(room.occupants) do
+			was[uid] = i
+		end
+	end
 	for _, room in ipairs(data.rooms) do
 		room.occupants = {}
 	end
@@ -307,32 +427,40 @@ local function autoArrange(player, data)
 					if genderOf(ra.occupants[i]) ~= genderOf(rb.occupants[j]) and (#ra.occupants > 1 or #rb.occupants > 1) then
 						continue
 					end
-					local before = roomIncome(ra) + roomIncome(rb)
+					local income = roomIncome(ra) + roomIncome(rb)
 					ra.occupants[i], rb.occupants[j] = rb.occupants[j], ra.occupants[i]
-					if roomIncome(ra) + roomIncome(rb) <= before + 1e-6 then
+					if roomIncome(ra) + roomIncome(rb) <= income + 1e-6 then
 						ra.occupants[i], rb.occupants[j] = rb.occupants[j], ra.occupants[i]
 					end
 				end
 			end
 		end
 	end
+
+	local moved = 0
+	for i, room in ipairs(data.rooms) do
+		for _, uid in ipairs(room.occupants) do
+			if was[uid] ~= i then
+				moved += 1
+			end
+			was[uid] = nil
+		end
+	end
+	for _ in pairs(was) do
+		moved += 1 -- lost their bed
+	end
+	local after = SchoolMath.totals(data, mult)
+	audit(data, { k = "auto", n = moved, sat0 = round1(before.satisfaction), sat1 = round1(after.satisfaction), inc0 = math.floor(before.income), inc1 = math.floor(after.income) })
 end
 
 ---------------------------------------------------------------------------
 -- Outings: a few students who get along go out and come back with a photo
 ---------------------------------------------------------------------------
-local function shortName(def)
-	return string.match(def.name, "%S+$") or def.name
-end
+local shortName = Config.ShortName
+local joinNames = SchoolMath.joinNames
 
-local function joinNames(names)
-	if #names <= 1 then
-		return names[1] or ""
-	end
-	return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
-end
-
-local function startOuting(player, data)
+-- auto: the students decided to go themselves (false = the player sent them)
+local function startOuting(player, data, auto)
 	local housed = {}
 	for _, room in ipairs(data.rooms) do
 		for _, uid in ipairs(room.occupants) do
@@ -351,16 +479,18 @@ local function startOuting(player, data)
 	local candidates = {}
 	for _, uid in ipairs(housed) do
 		if uid ~= leader then
-			local score = SchoolMath.vibe(def(leader), def(uid)) + SchoolMath.bond(data, leader, uid) / 200 + math.random() * 0.15
-			table.insert(candidates, { uid = uid, score = score })
+			local v, bond = SchoolMath.vibe(def(leader), def(uid)), SchoolMath.bond(data, leader, uid)
+			table.insert(candidates, { uid = uid, score = v + bond / 200 + math.random() * 0.15, v = v, bond = bond })
 		end
 	end
 	table.sort(candidates, function(a, b)
 		return a.score > b.score
 	end)
-	local members = { leader }
+	local members, picks = { leader }, {}
 	for i = 1, math.min(math.random(1, 3), #candidates) do
-		table.insert(members, candidates[i].uid)
+		local c = candidates[i]
+		table.insert(members, c.uid)
+		table.insert(picks, { s = ref(data, c.uid), v = math.floor(c.v * 100 + 0.5), b = c.bond })
 	end
 	-- activity: likelier when members have its tags
 	local weights, total = {}, 0
@@ -376,15 +506,16 @@ local function startOuting(player, data)
 		weights[i] = w
 		total += w
 	end
-	local pick, activity = math.random() * total, Config.Activities[1]
+	local pick, activity, weight = math.random() * total, Config.Activities[1], weights[1]
 	for i, act in ipairs(Config.Activities) do
 		pick -= weights[i]
 		if pick <= 0 then
-			activity = act
+			activity, weight = act, weights[i]
 			break
 		end
 	end
 	data.outing = { activity = activity.id, members = members, returnAt = os.time() + math.random(Config.OutingTime[1], Config.OutingTime[2]) }
+	audit(data, { k = "out", m = refs(data, members), act = activity.id, lead = ref(data, leader), picks = picks, auto = auto == true, pc = math.floor(weight / total * 100 + 0.5), tags = (weight - 1) // 2 })
 	local names = {}
 	for _, uid in ipairs(members) do
 		table.insert(names, shortName(def(uid)))
@@ -427,10 +558,13 @@ local function finishOuting(player, data)
 	local outcome = roll < great and "great" or roll > 1 - awkward and "awkward" or "fun"
 	local info = Config.Outcomes[outcome]
 	local gain = info.bond * ((preferred and info.bond > 0) and 1.5 or 1)
+	audit(data, { k = "back", m = refs(data, members), act = activity.id, o = outcome, v = math.floor(v * 100 + 0.5), pg = math.floor(great * 100 + 0.5), pa = math.floor(awkward * 100 + 0.5), pref = preferred, gain = gain })
 	for a = 1, #members do
 		for b = a + 1, #members do
-			local key = Config.BondKey(members[a], members[b])
-			data.bonds[key] = math.clamp((data.bonds[key] or 0) + gain, Config.BondMin, Config.BondMax)
+			local _, level = addBond(data, members[a], members[b], gain, "out:" .. activity.id .. ":" .. outcome)
+			if level then
+				bondNews(player, data, members[a], members[b], level)
+			end
 		end
 		if outcome == "great" then
 			data.buffs[members[a]] = os.time() + Config.OutingBuff.seconds
@@ -461,7 +595,7 @@ function Actions.outing(player, data)
 	if wait > 0 then
 		return { ok = false, err = string.format("Next outing in %d:%02d", wait // 60, wait % 60) }
 	end
-	local ok, err = startOuting(player, data)
+	local ok, err = startOuting(player, data, false)
 	if not ok then
 		return { ok = false, err = err }
 	end
@@ -494,7 +628,7 @@ function Actions.daily(player, data)
 	if os.time() - data.lastDaily < Config.DailyCooldown then
 		return { ok = false, err = "Daily admission not ready yet." }
 	end
-	local results, err = doPulls(player, data, Config.BannerById[Config.DailyFreeBanner], 1)
+	local results, err = doPulls(player, data, Config.BannerById[Config.DailyFreeBanner], 1, "daily")
 	if not results then
 		return { ok = false, err = err }
 	end
@@ -554,6 +688,7 @@ function Actions.hire(player, data, args)
 	local isNew = not data.discovered[a.id]
 	data.students[uid] = { id = a.id, shiny = a.shiny }
 	data.discovered[a.id] = true
+	audit(data, { k = "join", list = { { uid, a.id } }, by = "hire" })
 	if Config.Rarities[def.rarity].rank >= 5 or (a.shiny and Config.Rarities[def.rarity].rank >= 4) then
 		AnnounceEv:FireAllClients({ player = player.DisplayName, student = def.name, rarity = def.rarity, shiny = a.shiny })
 	end
@@ -653,10 +788,11 @@ end
 
 local function moveStudent(fromData, toData, uid)
 	local s = fromData.students[uid]
-	forget(fromData, uid)
+	forget(fromData, uid, "trade")
 	local nu = DataService.NewUid(toData)
 	toData.students[nu] = { id = s.id, shiny = s.shiny, xp = s.xp, lv = s.lv, mut = s.mut }
 	toData.discovered[s.id] = true
+	audit(toData, { k = "join", list = { { nu, s.id } }, by = "trade" })
 end
 
 function Actions.roster(player, data, args)
@@ -785,6 +921,7 @@ function Actions.assign(player, data, args)
 	end
 	removeFromRoom(data, uid)
 	table.insert(room.occupants, uid)
+	audit(data, { k = "move", s = ref(data, uid), from = current or 0, to = roomIndex, by = "you", with = roommates(data, uid, roomIndex) })
 	return { ok = true }
 end
 
@@ -792,8 +929,17 @@ function Actions.unassign(player, data, args)
 	if typeof(args.uid) ~= "string" then
 		return { ok = false }
 	end
-	removeFromRoom(data, args.uid)
+	local current = roomOf(data, args.uid)
+	if current then
+		removeFromRoom(data, args.uid)
+		audit(data, { k = "move", s = ref(data, args.uid), from = current, to = 0, by = "you" })
+	end
 	return { ok = true }
+end
+
+-- the audit log, newest last (the state push leaves it out)
+function Actions.audit(player, data)
+	return { ok = true, log = data.audit, now = os.time() }
 end
 
 function Actions.livingItem(player, data, args)
@@ -834,7 +980,7 @@ function Actions.expel(player, data, args)
 	end
 	local def = Config.StudentById[s.id]
 	local value = Config.Rarities[def.rarity].expel * (s.shiny and 3 or 1)
-	forget(data, args.uid)
+	forget(data, args.uid, "expel")
 	data.cash += value
 	return { ok = true, value = value }
 end
@@ -855,7 +1001,8 @@ local function commitPlan(data, copy)
 	for i, room in ipairs(data.rooms) do
 		room.area = House.area(data, "r" .. i)
 		while #room.occupants > Config.Beds(room) do
-			table.remove(room.occupants)
+			local uid = table.remove(room.occupants)
+			audit(data, { k = "move", s = ref(data, uid), from = i, to = 0, by = "plan" })
 		end
 	end
 end
@@ -1164,7 +1311,7 @@ function Actions.tutorialDone(player, data)
 	return { ok = true }
 end
 
-local NO_STATE_PUSH = { visit = true, home = true, roster = true }
+local NO_STATE_PUSH = { visit = true, home = true, roster = true, audit = true }
 local cooldown = {}
 
 ActionFn.OnServerInvoke = function(player, action, args)
@@ -1200,10 +1347,10 @@ local function product(key, fn)
 	end
 end
 product("RoyalPull", function(player, data)
-	return doPulls(player, data, Config.BannerById.royal, 1)
+	return doPulls(player, data, Config.BannerById.royal, 1, "robux")
 end)
 product("RoyalPull10", function(player, data)
-	return doPulls(player, data, Config.BannerById.royal, 10)
+	return doPulls(player, data, Config.BannerById.royal, 10, "robux")
 end)
 product("CashSmall", function(player, data)
 	local amount = math.max(5000, math.floor(session[player].totals.income * 600))
@@ -1458,22 +1605,42 @@ end)
 ---------------------------------------------------------------------------
 -- Bonds: roommates grow closer (or apart) depending on their vibe
 ---------------------------------------------------------------------------
-local function tickBonds(data)
-	for _, room in ipairs(data.rooms) do
+-- Returns what happened for the audit log: how many pairs moved each way
+-- and the biggest movers. Level changes are logged (and toasted) one by one.
+local function tickBonds(player, data)
+	local sum = { up = 0, down = 0 }
+	for i, room in ipairs(data.rooms) do
 		local occ = room.occupants
 		for a = 1, #occ do
 			for b = a + 1, #occ do
 				local sa, sb = data.students[occ[a]], data.students[occ[b]]
 				if sa and sb then
-					local v = SchoolMath.vibe(Config.StudentById[sa.id], Config.StudentById[sb.id])
-					local key = Config.BondKey(occ[a], occ[b])
-					local before = data.bonds[key] or 0
-					local after = math.clamp(before + (v * 100 - 50) * Config.BondPerTick, Config.BondMin, Config.BondMax)
-					data.bonds[key] = after
+					-- a peacekeeper in the room stops bad vibes from turning roommates into rivals
+					local v, peace = SchoolMath.roomVibe(data, occ, Config.StudentById[sa.id], Config.StudentById[sb.id])
+					local pct = math.floor(v * 100 + 0.5)
+					local moved, level = addBond(data, occ[a], occ[b], (v * 100 - 50) * Config.BondPerTick, "room", { room = i, vibe = pct })
+					if level then
+						bondNews(player, data, occ[a], occ[b], level)
+					end
+					if moved ~= 0 then
+						local m = { a = ref(data, occ[a]), b = ref(data, occ[b]), d = round1(moved), v = pct, r = i, peace = peace or nil }
+						if moved > 0 then
+							sum.up += 1
+						else
+							sum.down += 1
+						end
+						if not sum.best or moved > sum.best.d then
+							sum.best = m
+						end
+						if not sum.worst or moved < sum.worst.d then
+							sum.worst = m
+						end
+					end
 				end
 			end
 		end
 	end
+	return sum
 end
 
 -- groups come back from outings, and new ones head out on their own
@@ -1491,7 +1658,7 @@ task.spawn(function()
 					s.nextAutoOuting = s.nextAutoOuting or now + math.random(60, Config.OutingAutoEvery)
 					if now >= s.nextAutoOuting then
 						s.nextAutoOuting = now + math.random(Config.OutingAutoEvery * 0.6, Config.OutingAutoEvery * 1.4)
-						if startOuting(player, data) then
+						if startOuting(player, data, true) then
 							pushState(player)
 						end
 					end
@@ -1501,18 +1668,35 @@ task.spawn(function()
 	end
 end)
 
--- students who love the same living room item hang out there and bond a little
-local function tickHangouts(data)
+-- students who love the same living room item hang out there and bond a
+-- little. Returns { { item, a, b, d } } for the audit log.
+local HANGOUT_BOND = 2
+local function tickHangouts(player, data)
+	local hangs = {}
 	if not data.facilities.living then
-		return
+		return hangs
+	end
+	-- whoever is out on an outing isn't in the living room
+	local away = {}
+	if data.outing then
+		for _, uid in ipairs(data.outing.members) do
+			away[uid] = true
+		end
 	end
 	local housed = {}
 	for _, room in ipairs(data.rooms) do
 		for _, uid in ipairs(room.occupants) do
-			table.insert(housed, uid)
+			if data.students[uid] and not away[uid] then
+				table.insert(housed, uid)
+			end
 		end
 	end
+	local items = {}
 	for itemId in pairs(data.livingItems) do
+		table.insert(items, itemId)
+	end
+	table.sort(items)
+	for _, itemId in ipairs(items) do
 		local item = Config.LivingItemById[itemId]
 		local fans = {}
 		for _, uid in ipairs(housed) do
@@ -1527,11 +1711,17 @@ local function tickHangouts(data)
 		for _ = 1, math.min(4, #fans // 2) do
 			local a, b = fans[math.random(1, #fans)], fans[math.random(1, #fans)]
 			if a ~= b then
-				local key = Config.BondKey(a, b)
-				data.bonds[key] = math.clamp((data.bonds[key] or 0) + 2, Config.BondMin, Config.BondMax)
+				local moved, level = addBond(data, a, b, HANGOUT_BOND, "item:" .. itemId)
+				if level then
+					bondNews(player, data, a, b, level)
+				end
+				if moved ~= 0 then
+					table.insert(hangs, { item = itemId, a = ref(data, a), b = ref(data, b), d = round1(moved) })
+				end
 			end
 		end
 	end
+	return hangs
 end
 
 task.spawn(function()
@@ -1540,8 +1730,12 @@ task.spawn(function()
 		for player in pairs(session) do
 			local data = DataService.Get(player)
 			if data then
-				tickBonds(data)
-				tickHangouts(data)
+				local sum = tickBonds(player, data)
+				sum.hang = tickHangouts(player, data)
+				if sum.up + sum.down + #sum.hang > 0 then
+					sum.k = "tick"
+					audit(data, sum)
+				end
 				recompute(player)
 				pushState(player)
 			end

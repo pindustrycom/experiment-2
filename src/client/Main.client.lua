@@ -167,7 +167,7 @@ local menu = UI.new("Frame", {
 	BackgroundTransparency = 1,
 	AnchorPoint = Vector2.new(0, 0.5),
 	Position = UDim2.new(0, 10, 0.5, 0),
-	Size = UDim2.fromOffset(120, 580),
+	Size = UDim2.fromOffset(120, 638),
 	Parent = gui,
 })
 UI.list(menu, 8)
@@ -190,6 +190,7 @@ menuButton("enroll", "🎓 Enroll", C.purple)
 menuButton("rooms", "🛏 Rooms", C.blue)
 menuButton("students", "👥 Students", Color3.fromRGB(60, 190, 170))
 menuButton("design", "🎨 Build", Color3.fromRGB(240, 140, 60))
+menuButton("audit", "🔍 Audit", Color3.fromRGB(110, 130, 230))
 UI.button(menu, "🏠 My Room", Color3.fromRGB(90, 120, 200), function()
 	SFX.click()
 	openPanel(nil)
@@ -1362,7 +1363,10 @@ function Render.satisfaction()
 	local d = State.data
 	panelTitle.Text = string.format("😊 Happiness  %s %d%%", SchoolMath.moodEmoji(State.satisfaction or 0), math.floor(State.satisfaction or 0))
 	resetLayout("list")
-	UI.text(toolbar, "100% doubles a student's income. Fix the red rooms first!", 15, C.sub, { Size = UDim2.new(1, 0, 1, 0) })
+	UI.button(toolbar, "🔍 Audit", Color3.fromRGB(110, 130, 230), function()
+		openPanel("audit")
+	end, { Size = UDim2.fromOffset(110, 40) })
+	UI.text(toolbar, "100% doubles a student's income. Fix the red rooms first!", 15, C.sub, { Size = UDim2.new(1, -120, 1, 0) })
 	local list = {}
 	for i, room in ipairs(d.rooms) do
 		if #room.occupants > 0 then
@@ -1440,6 +1444,234 @@ function Render.satisfaction()
 	end
 	if #list == 0 then
 		UI.text(scroll, "No one has moved in yet. Open the Students board and give them beds!", 18, C.sub)
+	end
+end
+
+-- Audit: what is going on between students and why. Three tabs:
+--   Checks: problems found right now, most serious first (SchoolMath.auditChecks)
+--   Pairs:  every pair's vibe worked out step by step, their bond and where it is heading
+--   Log:    what happened, with the numbers the server used (it keeps the log; we fetch it)
+local TONE_COLORS = { bug = Color3.fromRGB(255, 90, 200), bad = C.red, warn = Color3.fromRGB(255, 170, 60), good = C.green, tip = C.gold, info = C.blue }
+local auditFetching = false
+
+local function ago(t)
+	local d = math.max(0, serverNow() - (t or 0))
+	if d < 60 then
+		return "just now"
+	elseif d < 3600 then
+		return math.floor(d / 60) .. " min ago"
+	elseif d < 86400 then
+		return math.floor(d / 3600) .. " h ago"
+	end
+	return math.floor(d / 86400) .. " d ago"
+end
+
+local function fetchAudit()
+	if auditFetching then
+		return
+	end
+	auditFetching = true
+	task.spawn(function()
+		local res = call("audit")
+		auditFetching = false
+		if res.ok and res.log then
+			State.audit = res.log
+			State.auditSeq = State.data and State.data.auditSeq
+			if currentPanel == "audit" then
+				refresh()
+			end
+		end
+	end)
+end
+
+-- "🤓 Nerd × 🎮 Gamer 80%"
+local function tagPairText(p)
+	local a, b = Config.Tags[p.a], Config.Tags[p.b]
+	return string.format("%s %s × %s %s <b>%d%%</b>", a.emoji, a.name, b.emoji, b.name, math.floor(p.p * 100 + 0.5))
+end
+
+local function vibeExplained(rep)
+	local d = rep.detail
+	if rep.rule == "crew" then
+		return string.format('<font color="#ff8cb0">🌹 Both are La Rose, so their vibe is always %d%%.</font>', math.floor(Config.LaRoseVibe * 100 + 0.5))
+	end
+	local bits = {}
+	for _, p in ipairs(d.pairs) do
+		table.insert(bits, tagPairText(p))
+	end
+	local line = table.concat(bits, "  ·  ")
+	local raw = math.floor(d.raw * 100 + 0.5)
+	if #d.pairs > 1 then
+		line ..= string.format("  →  geometric mean <b>%d%%</b>", raw)
+	end
+	if rep.rule == "chill" then
+		local chill = (rep.defA.trait and rep.defA.trait.kind == "Chill") and rep.defA or rep.defB
+		line ..= string.format('\n<font color="#7ee08a">😌 %s never has a bad vibe with anyone, so it is lifted to 50%%.</font>', Config.ShortName(chill))
+	elseif rep.rule == "peace" then
+		line ..= string.format('\n<font color="#7ee08a">🕊 %s keeps the peace in this room, so it counts as 50%%.</font>', Config.ShortName(rep.peaceBy))
+	end
+	return line
+end
+
+local function pairCard(rep, order)
+	local d = State.data
+	local pct = math.floor(rep.vibe * 100 + 0.5)
+	local tone = (rep.score < 0 or rep.vibe < 0.42 or rep.splitSat < 0) and C.red or (rep.vibe >= 0.58 or rep.score >= 40) and C.green or C.sub
+	local card = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = order })
+	UI.stroke(card, tone, 2)
+	UI.pad(card, 10)
+	UI.list(card, 4)
+	local where = rep.room and ("Room " .. rep.room) or string.format("%s / %s", rep.roomA and ("Room " .. rep.roomA) or "no bed", rep.roomB and ("Room " .. rep.roomB) or "no bed")
+	UI.text(card, string.format('%s <b>%s</b>  +  %s <b>%s</b>   <font color="#bbb6dc">%s</font>', Config.TagEmoji(rep.defA), rep.defA.name, Config.TagEmoji(rep.defB), rep.defB.name, where), 18, C.text, { LayoutOrder = 1 })
+	local auto = { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0) }
+	local function line(text, order2, color)
+		auto.LayoutOrder = order2
+		return UI.text(card, text, 14, color or C.sub, auto)
+	end
+	line(string.format("<b>Vibe %d%% %s</b>   %s", pct, SchoolMath.vibeEmoji(rep.vibe), vibeExplained(rep)), 2)
+	-- bond bar from Rivals (-50) to Siblings (100)
+	local bar = UI.new("Frame", { BackgroundColor3 = C.bg, Size = UDim2.new(1, 0, 0, 14), LayoutOrder = 3, Parent = card })
+	UI.corner(bar, 7)
+	local span = Config.BondMax - Config.BondMin
+	local zero = -Config.BondMin / span
+	local at = (rep.score - Config.BondMin) / span
+	local fill = UI.new("Frame", {
+		BackgroundColor3 = rep.score < 0 and C.red or C.green,
+		Position = UDim2.fromScale(math.min(zero, at), 0),
+		Size = UDim2.fromScale(math.max(0.01, math.abs(at - zero)), 1),
+		Parent = bar,
+	})
+	UI.corner(fill, 7)
+	for _, l in ipairs(Config.BondLevels) do
+		if l.min > Config.BondMin then
+			UI.new("Frame", { BackgroundColor3 = C.text, BackgroundTransparency = 0.5, BorderSizePixel = 0, Position = UDim2.fromScale((l.min - Config.BondMin) / span, 0), Size = UDim2.new(0, 2, 1, 0), Parent = bar })
+		end
+	end
+	local bond = string.format("<b>%s %s</b> (bond %d)", rep.level.emoji, Config.BondName(rep.level, rep.defA, rep.defB), math.floor(rep.score + 0.5))
+	if rep.drift ~= 0 then
+		bond ..= string.format("   %+.1f every %d min as roommates", rep.drift, Config.BondTick // 60)
+		if rep.next and rep.eta then
+			bond ..= string.format(", %s %s in about %s", rep.drift > 0 and "up to" or "down to", Config.BondName(rep.next, rep.defA, rep.defB), SchoolMath.minutes(rep.eta))
+		elseif rep.drift > 0 then
+			bond ..= ", already as close as it gets"
+		end
+	elseif rep.room then
+		bond ..= "   steady: a 50% vibe doesn't move it"
+	else
+		bond ..= "   only outings and the living room move it while they live apart"
+	end
+	line(bond, 4)
+	local mood
+	if rep.room then
+		local total = rep.vibeSat + rep.bondSat
+		mood = string.format('Mood for each: vibe <font color="%s">%+d</font>, friendship <font color="%s">%+d</font>  =  <b>%+d</b>', rep.vibeSat >= 0 and "#7ee08a" or "#ff8080", math.floor(rep.vibeSat + 0.5), rep.bondSat >= 0 and "#7ee08a" or "#ff8080", rep.bondSat, math.floor(total + 0.5))
+		if rep.peaceBy and rep.level.sat < 0 then
+			mood ..= "  (rivalry ignored: peace kept)"
+		end
+	elseif rep.splitSat < 0 then
+		mood = string.format('<font color="#ff8080">Mood for each: <b>%d</b> because they miss each other. Put them in the same room.</font>', rep.splitSat)
+	else
+		mood = "Mood: no effect while they live in different rooms."
+	end
+	line(mood, 5)
+	if rep.room then
+		UI.button(card, "Open Room " .. rep.room, C.blue, function()
+			showRoom(rep.room)
+		end, { Size = UDim2.fromOffset(140, 30), TextSize = 14, LayoutOrder = 6 })
+	end
+	local _ = d
+end
+
+function Render.audit()
+	local d = State.data
+	local st = panelState.audit or { tab = "checks", filter = "all", pairs = "room" }
+	panelState.audit = st
+	panelTitle.Text = "🔍 Audit: students and their interactions"
+	resetLayout("list")
+	for _, t in ipairs({ { "checks", "🩺 Checks" }, { "pairs", "💞 Pairs" }, { "log", "📜 Log" } }) do
+		UI.button(toolbar, t[2], st.tab == t[1] and C.purple or C.card, function()
+			st.tab = t[1]
+			scroll.CanvasPosition = Vector2.zero
+			refresh()
+		end, { Size = UDim2.fromOffset(120, 40) })
+	end
+	local function chips(options, key)
+		local row = UI.new("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), LayoutOrder = 0, Parent = scroll })
+		UI.list(row, 6, true)
+		for _, o in ipairs(options) do
+			UI.button(row, o[2], st[key] == o[1] and C.blue or C.card, function()
+				st[key] = o[1]
+				refresh()
+			end, { Size = UDim2.fromOffset(o[3] or 110, 30), TextSize = 14 })
+		end
+	end
+
+	if st.tab == "checks" then
+		local checks = SchoolMath.auditChecks(d, serverNow())
+		local trouble = 0
+		for _, c in ipairs(checks) do
+			if c.sev == "bug" or c.sev == "bad" or c.sev == "warn" then
+				trouble += 1
+			end
+		end
+		UI.text(toolbar, trouble == 0 and "All good" or (trouble .. " thing" .. (trouble == 1 and "" or "s") .. " to fix"), 15, trouble == 0 and C.green or C.gold, { Size = UDim2.fromOffset(150, 40) })
+		for i, c in ipairs(checks) do
+			local card = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = i })
+			UI.stroke(card, TONE_COLORS[c.sev] or C.sub, 2)
+			UI.pad(card, 10)
+			UI.list(card, 6)
+			UI.text(card, c.text, 16, C.text, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 1 })
+			if c.room and (c.sev == "bad" or c.sev == "warn" or c.sev == "bug") then
+				UI.button(card, "Open Room " .. c.room, C.blue, function()
+					showRoom(c.room)
+				end, { Size = UDim2.fromOffset(140, 30), TextSize = 14, LayoutOrder = 2 })
+			end
+		end
+	elseif st.tab == "pairs" then
+		chips({ { "room", "Roommates" }, { "trouble", "Trouble" }, { "all", "Everyone" } }, "pairs")
+		local shown = 0
+		for i, rep in ipairs(SchoolMath.auditPairs(d)) do
+			local trouble = rep.score < 0 or rep.vibe < 0.42 or rep.splitSat < 0
+			if st.pairs == "all" or (st.pairs == "room" and rep.room) or (st.pairs == "trouble" and trouble) then
+				shown += 1
+				if shown <= 40 then
+					pairCard(rep, i)
+				end
+			end
+		end
+		if shown == 0 then
+			UI.text(scroll, st.pairs == "trouble" and "✅ No pair is in trouble." or "No pairs yet. Put two students in the same room and they start to bond.", 16, C.sub, { LayoutOrder = 1, AutomaticSize = Enum.AutomaticSize.Y })
+		elseif shown > 40 then
+			UI.text(scroll, string.format("+%d more pairs. Use the Trouble filter to narrow it down.", shown - 40), 14, C.sub, { LayoutOrder = 9999 })
+		end
+		UI.text(toolbar, "Vibe = geometric mean of every tag pair", 14, C.sub, { Size = UDim2.fromOffset(280, 40) })
+	else
+		if State.auditSeq ~= d.auditSeq or not State.audit then
+			fetchAudit()
+		end
+		chips({ { "all", "All", 70 }, { "bonds", "💞 Bonds" }, { "outings", "📸 Outings" }, { "moves", "🛏 Moves" }, { "routine", "⏱ Every 3 min", 130 } }, "filter")
+		local log = State.audit or {}
+		local shown = 0
+		for i = #log, 1, -1 do
+			local e = log[i]
+			local group = SchoolMath.AuditGroups[e.k]
+			if (st.filter == "all" and group ~= "routine") or group == st.filter then
+				shown += 1
+				local l = SchoolMath.auditLine(e)
+				local card = UI.card(scroll, { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = shown })
+				UI.stroke(card, TONE_COLORS[l.tone] or C.sub, 2)
+				UI.pad(card, 10)
+				UI.list(card, 3)
+				UI.text(card, string.format('<b>%s</b>   <font color="#bbb6dc">%s</font>', l.text, ago(e.t)), 16, C.text, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 1 })
+				if l.why ~= "" then
+					UI.text(card, l.why, 14, C.sub, { AutomaticSize = Enum.AutomaticSize.Y, Size = UDim2.new(1, 0, 0, 0), LayoutOrder = 2 })
+				end
+			end
+		end
+		if shown == 0 then
+			UI.text(scroll, State.audit and "Nothing here yet. Move students in together, send a group out, or wait a few minutes." or "Loading…", 16, C.sub, { LayoutOrder = 1, AutomaticSize = Enum.AutomaticSize.Y })
+		end
+		UI.text(toolbar, string.format("Last %d events, newest first", #log), 14, C.sub, { Size = UDim2.fromOffset(240, 40) })
 	end
 end
 
@@ -1880,7 +2112,7 @@ Remotes:WaitForChild("State").OnClientEvent:Connect(function(st)
 				"🎓 Use <b>Enroll</b> to recruit new students. The <b>Applicants</b> board gets new faces every 5 minutes, so check back for Legendary & Mythic ones and shiny ✨ variants!",
 				"🌱 Housed students <b>glow up</b> over time (even while you're offline): every level earns more, and some <b>mutate</b> 🌟💰⛈👑🌈 for huge bonuses.",
 				"📅 Every hour a <b>school event</b> runs for 20 minutes (Exam Week, Prom, Thunderstorm, Talent Show) with boosts and a limited-time student. Use <b>Trade</b> to swap or gift students with other players!",
-				"📋 Your room has 3 boards on the wall. <b>Floor plans</b>: design your house: hallways, rooms of any size, stairs, supports and new floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. Walk up and press <b>E</b>.",
+				"📋 Your room has 4 boards on the wall. <b>Floor plans</b>: design your house: hallways, rooms of any size, stairs, supports and new floors. <b>Students</b>: who sleeps where. <b>Happiness</b>: how everyone feels and why. <b>Audit</b>: what happened between students, who clicks, and what to fix. Walk up and press <b>E</b>.",
 				"🎨 Use <b>Build</b> to pick materials for walls, floors and the roof, and to furnish your room. Nicer dorms = happier students!",
 			}
 			local box = UI.card(gui, { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -20), Size = UDim2.fromOffset(520, 110), BackgroundColor3 = C.bg })

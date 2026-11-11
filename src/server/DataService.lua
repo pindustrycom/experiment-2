@@ -60,6 +60,8 @@ function DataService.Default()
 		buffs = {}, -- [uid] = time a great-outing mood boost ends
 		applicants = { window = 0, salt = 0, bought = {} }, -- this restock's board (SchoolMath.applicants)
 		luckUntil = 0, -- Lucky Hour pass end time
+		audit = {}, -- what happened between students and why, oldest first (Main.server audit)
+		auditSeq = 0,
 	}
 	data.layout.me = { floor = 0, x = House.Default.rightX, z = 0, w = House.MeSize[1], d = House.MeSize[2] }
 	data.layout.common = { floor = 0, x = House.Default.leftX, z = 0, w = 3, d = 3 }
@@ -204,6 +206,9 @@ local function reconcile(data)
 		if not data.students[uid] or untilTime < os.time() then
 			data.buffs[uid] = nil
 		end
+	end
+	if typeof(data.audit) ~= "table" then
+		data.audit = {}
 	end
 	if not Config.HouseGenders[data.houseGender] then
 		data.houseGender = "Mixed"
