@@ -210,13 +210,162 @@ local function setupLighting()
 	effect("ColorCorrectionEffect", { Brightness = -0.04, Contrast = 0.1, Saturation = 0.12, TintColor = Color3.fromRGB(255, 248, 240) })
 end
 
+-- ---------- scenery ----------
+local LEAF = { Color3.fromRGB(72, 150, 66), Color3.fromRGB(88, 168, 74), Color3.fromRGB(60, 132, 62), Color3.fromRGB(104, 178, 82) }
+local PETALS = { Color3.fromRGB(240, 90, 110), Color3.fromRGB(250, 200, 70), Color3.fromRGB(245, 245, 250), Color3.fromRGB(190, 120, 230), Color3.fromRGB(255, 150, 60) }
+local IRON = Color3.fromRGB(40, 40, 45)
+
+local function scenery(parent, name, size, cf, color, material, extra)
+	local props = { Name = name, Size = size, CFrame = cf, Color = color, Material = material or Enum.Material.SmoothPlastic, Parent = parent }
+	for k, v in pairs(extra or {}) do
+		props[k] = v
+	end
+	return part(props)
+end
+
+-- cf: base of the trunk on the ground. Leaves are a few overlapping lobes, so no two trees look stamped.
+local function tree(parent, cf, scale, seed)
+	local h = 7 * scale
+	scenery(parent, "Trunk", Vector3.new(h, 1.5 * scale, 1.5 * scale), cf * CFrame.new(0, h / 2, 0) * CFrame.Angles(0, 0, math.pi / 2), Color3.fromRGB(110, 75, 45), Enum.Material.Wood, { Shape = Enum.PartType.Cylinder })
+	scenery(parent, "Leaves", Vector3.new(8.5, 8.5, 8.5) * scale, cf * CFrame.new(0, h + 2.4 * scale, 0), LEAF[seed % #LEAF + 1], Enum.Material.Grass, { Shape = Enum.PartType.Ball, CanCollide = false })
+	for i = 0, 2 do
+		local a = seed * 1.3 + i * math.pi * 2 / 3
+		local r = (5.2 + (seed + i) % 3 * 0.7) * scale
+		scenery(parent, "Leaves", Vector3.new(r, r, r), cf * CFrame.new(math.cos(a) * 3 * scale, h + (0.6 + i * 1.1) * scale, math.sin(a) * 3 * scale), LEAF[(seed + i + 1) % #LEAF + 1], Enum.Material.Grass, { Shape = Enum.PartType.Ball, CanCollide = false })
+	end
+end
+
+-- a rounded shrub; `bloom` dots it with flowers
+local function bush(parent, cf, size, seed, bloom)
+	scenery(parent, "Bush", Vector3.new(size * 1.5, size, size * 1.2), cf * CFrame.new(0, size * 0.42, 0), LEAF[seed % #LEAF + 1], Enum.Material.Grass, { Mesh = "Sphere", CanCollide = false })
+	scenery(parent, "Bush", Vector3.new(size * 0.9, size * 0.8, size * 0.9), cf * CFrame.new(size * 0.45, size * 0.5, size * 0.15), LEAF[(seed + 1) % #LEAF + 1], Enum.Material.Grass, { Mesh = "Sphere", CanCollide = false })
+	if bloom then
+		for i = 0, 4 do
+			local a = seed + i * 1.9
+			scenery(parent, "Bloom", Vector3.new(0.45, 0.45, 0.45), cf * CFrame.new(math.cos(a) * size * 0.5, size * (0.62 + (i % 2) * 0.16), math.sin(a) * size * 0.38), bloom, nil, { Shape = Enum.PartType.Ball, CanCollide = false })
+		end
+	end
+end
+
+-- cf: center of the bed on the ground; flowers run along local X
+local function flowerBed(parent, cf, length, seed)
+	scenery(parent, "Soil", Vector3.new(length, 0.3, 1.8), cf * CFrame.new(0, 0.15, 0), Color3.fromRGB(95, 65, 45), Enum.Material.Ground, { CanCollide = false })
+	local n = math.floor(length / 1.1)
+	for i = 1, n do
+		local x = -length / 2 + (i - 0.5) * length / n
+		local z = ((i + seed) % 3 - 1) * 0.4
+		local tall = 0.7 + ((i * 7 + seed) % 4) * 0.14
+		scenery(parent, "Stem", Vector3.new(0.12, tall, 0.12), cf * CFrame.new(x, 0.3 + tall / 2, z), Color3.fromRGB(70, 140, 60), nil, { CanCollide = false })
+		scenery(parent, "Flower", Vector3.new(0.55, 0.55, 0.55), cf * CFrame.new(x, 0.35 + tall, z), PETALS[(i + seed) % #PETALS + 1], nil, { Shape = Enum.PartType.Ball, CanCollide = false })
+	end
+end
+
+-- cf: base of the post on the ground
+local function lampPost(parent, cf, height, lit)
+	scenery(parent, "LampBase", Vector3.new(0.8, 1.1, 1.1), cf * CFrame.new(0, 0.4, 0) * CFrame.Angles(0, 0, math.pi / 2), IRON, Enum.Material.Metal, { Shape = Enum.PartType.Cylinder })
+	scenery(parent, "LampPost", Vector3.new(height, 0.4, 0.4), cf * CFrame.new(0, height / 2, 0) * CFrame.Angles(0, 0, math.pi / 2), IRON, Enum.Material.Metal, { Shape = Enum.PartType.Cylinder })
+	scenery(parent, "LampCollar", Vector3.new(0.25, 1, 1), cf * CFrame.new(0, height, 0) * CFrame.Angles(0, 0, math.pi / 2), IRON, Enum.Material.Metal, { Shape = Enum.PartType.Cylinder })
+	local globe = scenery(parent, "LampGlobe", Vector3.new(1.3, 1.3, 1.3), cf * CFrame.new(0, height + 0.7, 0), Color3.fromRGB(255, 235, 190), Enum.Material.Neon, { Shape = Enum.PartType.Ball })
+	scenery(parent, "LampCap", Vector3.new(0.25, 0.9, 0.9), cf * CFrame.new(0, height + 1.4, 0) * CFrame.Angles(0, 0, math.pi / 2), IRON, Enum.Material.Metal, { Shape = Enum.PartType.Cylinder })
+	if lit ~= false then
+		local l = Instance.new("PointLight")
+		l.Range = 20
+		l.Brightness = 0.55
+		l.Color = Color3.fromRGB(255, 220, 170)
+		l.Parent = globe
+	end
+end
+
+-- cf: center of the seat on the ground, sitter faces local -Z
+local function bench(parent, cf)
+	local wood = Color3.fromRGB(150, 100, 60)
+	for i = -1, 1 do
+		scenery(parent, "BenchSeat", Vector3.new(6, 0.25, 0.5), cf * CFrame.new(0, 1.9, i * 0.6), wood, Enum.Material.WoodPlanks)
+	end
+	for i = 0, 1 do
+		scenery(parent, "BenchBack", Vector3.new(6, 0.55, 0.22), cf * CFrame.new(0, 2.6 + i * 0.75, 1 + i * 0.12) * CFrame.Angles(-0.15, 0, 0), wood, Enum.Material.WoodPlanks)
+	end
+	for _, x in ipairs({ -2.6, 2.6 }) do
+		scenery(parent, "BenchLeg", Vector3.new(0.3, 1.8, 1.9), cf * CFrame.new(x, 0.9, 0), IRON, Enum.Material.Metal)
+		scenery(parent, "BenchArm", Vector3.new(0.3, 0.25, 2), cf * CFrame.new(x, 2.6, -0.05), IRON, Enum.Material.Metal)
+		scenery(parent, "BenchStay", Vector3.new(0.3, 1.9, 0.3), cf * CFrame.new(x, 2.7, 1.06) * CFrame.Angles(-0.15, 0, 0), IRON, Enum.Material.Metal)
+	end
+end
+
+-- everything in a plot's yard that never changes: fence, gate, mailbox, flowers, lamps, trees
+local function buildYard(model, cf, index)
+	local y = GROUND_Y
+	local frontZ = -PLOT_D / 2 + 1.2
+	local white = Color3.fromRGB(245, 243, 238)
+	local function G(x, z)
+		return cf * CFrame.new(x, y, z)
+	end
+	-- picket fence along the street, open at the walk
+	for _, sd in ipairs({ -1, 1 }) do
+		local x0, x1 = 6.5, PLOT_W / 2 - 1.5
+		local mid, len = sd * (x0 + x1) / 2, x1 - x0
+		for _, h in ipairs({ 1, 2.2 }) do
+			scenery(model, "FenceRail", Vector3.new(len, 0.3, 0.2), G(mid, frontZ) * CFrame.new(0, h, 0.12), white, Enum.Material.WoodPlanks, { CanCollide = false })
+		end
+		local n = math.floor(len / 1.5)
+		for i = 0, n do
+			local x = sd * (x0 + i * len / n)
+			local post = i % 6 == 0
+			scenery(model, post and "FencePost" or "Picket", Vector3.new(post and 0.6 or 0.5, post and 3.4 or 2.8, post and 0.6 or 0.18), G(x, frontZ) * CFrame.new(0, post and 1.7 or 1.4, 0), white, Enum.Material.WoodPlanks, { CanCollide = post })
+			if post then
+				scenery(model, "PostCap", Vector3.new(0.8, 0.8, 0.8), G(x, frontZ) * CFrame.new(0, 3.6, 0), white, nil, { Shape = Enum.PartType.Ball, CanCollide = false })
+			end
+		end
+		-- gate pillar with a lantern
+		scenery(model, "GatePillar", Vector3.new(1.6, 4.4, 1.6), G(sd * 5.4, frontZ) * CFrame.new(0, 2.2, 0), Color3.fromRGB(170, 85, 65), Enum.Material.Brick)
+		scenery(model, "GateCap", Vector3.new(2, 0.4, 2), G(sd * 5.4, frontZ) * CFrame.new(0, 4.6, 0), Color3.fromRGB(215, 210, 200), Enum.Material.Concrete)
+		local lantern = scenery(model, "GateLantern", Vector3.new(0.9, 0.9, 0.9), G(sd * 5.4, frontZ) * CFrame.new(0, 5.25, 0), Color3.fromRGB(255, 235, 190), Enum.Material.Neon, { Shape = Enum.PartType.Ball, CanCollide = false })
+		local l = Instance.new("PointLight")
+		l.Range = 14
+		l.Brightness = 0.5
+		l.Color = Color3.fromRGB(255, 220, 170)
+		l.Parent = lantern
+		-- flowers down both sides of the walk, with a break halfway for the lamp
+		flowerBed(model, G(sd * 5.6, -66) * CFrame.Angles(0, math.pi / 2, 0), 9, index + (sd > 0 and 2 or 0))
+		flowerBed(model, G(sd * 5.6, -53) * CFrame.Angles(0, math.pi / 2, 0), 9, index + (sd > 0 and 5 or 3))
+		lampPost(model, G(sd * 5.8, -59.5), 7)
+		-- shrubs under the front windows and at the lot corners
+		for i = 0, 2 do
+			bush(model, G(sd * (11 + i * 5.2), HOUSE_Z0 - 2.4), 2.6 + (i + index) % 2 * 0.5, index + i + (sd > 0 and 3 or 0), i == 1 and PETALS[(index + (sd > 0 and 1 or 0)) % #PETALS + 1] or nil)
+		end
+		bush(model, G(sd * 70, frontZ + 3.5), 3.4, index + 7, PETALS[(index + 2) % #PETALS + 1])
+	end
+	-- mailbox by the gate
+	scenery(model, "MailPost", Vector3.new(0.4, 3.2, 0.4), G(-8.2, frontZ - 0.1) * CFrame.new(0, 1.6, -1.4), Color3.fromRGB(110, 75, 45), Enum.Material.Wood)
+	scenery(model, "Mailbox", Vector3.new(1, 1, 1.8), G(-8.2, frontZ - 0.1) * CFrame.new(0, 3.6, -1.4), Color3.fromRGB(200, 60, 55), Enum.Material.Metal)
+	scenery(model, "MailboxTop", Vector3.new(1.8, 1, 1), G(-8.2, frontZ - 0.1) * CFrame.new(0, 4.1, -1.4) * CFrame.Angles(0, math.pi / 2, 0), Color3.fromRGB(200, 60, 55), Enum.Material.Metal, { Shape = Enum.PartType.Cylinder })
+	scenery(model, "MailFlag", Vector3.new(0.1, 0.9, 0.35), G(-8.2, frontZ - 0.1) * CFrame.new(0.56, 4.2, -1.1), Color3.fromRGB(250, 210, 70))
+	-- a bench under the big front tree
+	bench(model, G(-40, -55) * CFrame.Angles(0, math.pi, 0) * CFrame.new(0, 0, 4.5))
+	for i, t in ipairs({ { -45, -55, 1.15 }, { 45, -50, 1 }, { -64, 10, 0.9 }, { 65, 30, 1.1 }, { -64, 58, 1 }, { 64, 70, 0.85 }, { 30, -66, 0.7 } }) do
+		tree(model, G(t[1], t[2]), t[3], index * 3 + i)
+	end
+end
+
 local function buildPlazaDecor(world)
 	local stone = Color3.fromRGB(215, 210, 200)
-	-- fountain
-	part({ Name = "FountainBasin", Shape = Enum.PartType.Cylinder, Size = Vector3.new(1.6, 16, 16), CFrame = CFrame.new(0, 1.2, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = stone, Material = Enum.Material.Marble, Parent = world })
-	part({ Name = "FountainWater", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.2, 14.4, 14.4), CFrame = CFrame.new(0, 1.95, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(70, 160, 230), Material = Enum.Material.Glass, Transparency = 0.25, Reflectance = 0.2, Parent = world })
-	part({ Name = "FountainPillar", Shape = Enum.PartType.Cylinder, Size = Vector3.new(5, 1.6, 1.6), CFrame = CFrame.new(0, 4, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = stone, Material = Enum.Material.Marble, Parent = world })
-	local bowl = part({ Name = "FountainBowl", Shape = Enum.PartType.Cylinder, Size = Vector3.new(0.8, 6, 6), CFrame = CFrame.new(0, 6.6, 18) * CFrame.Angles(0, 0, math.pi / 2), Color = stone, Material = Enum.Material.Marble, Parent = world })
+	local up = CFrame.Angles(0, 0, math.pi / 2)
+	local function disc(name, dia, h, y, color, material, extra)
+		extra = extra or {}
+		extra.Shape = Enum.PartType.Cylinder
+		return scenery(world, name, Vector3.new(h, dia, dia), CFrame.new(0, y, 18) * up, color, material, extra)
+	end
+	-- fountain: a wide basin with a rim, two bowls and a finial
+	disc("FountainStep", 19, 0.5, 0.65, Color3.fromRGB(190, 185, 175), Enum.Material.Concrete)
+	disc("FountainBasin", 16, 1.6, 1.2, stone, Enum.Material.Marble)
+	disc("FountainRim", 16.8, 0.4, 2.1, Color3.fromRGB(235, 232, 225), Enum.Material.Marble)
+	disc("FountainWater", 14.6, 0.2, 2.25, Color3.fromRGB(70, 160, 230), Enum.Material.Glass, { Transparency = 0.25, Reflectance = 0.2, CanCollide = false })
+	disc("FountainPillar", 1.8, 5, 4, stone, Enum.Material.Marble)
+	disc("FountainBowl", 7, 0.6, 5.4, stone, Enum.Material.Marble)
+	disc("FountainWater", 6.2, 0.2, 5.75, Color3.fromRGB(70, 160, 230), Enum.Material.Glass, { Transparency = 0.25, CanCollide = false })
+	disc("FountainPillar", 1.1, 2.6, 7, stone, Enum.Material.Marble)
+	local bowl = disc("FountainBowl", 3.6, 0.5, 8.3, stone, Enum.Material.Marble)
+	scenery(world, "FountainFinial", Vector3.new(1.2, 1.2, 1.2), CFrame.new(0, 9.1, 18), Color3.fromRGB(255, 210, 60), Enum.Material.Foil, { Shape = Enum.PartType.Ball })
 	local spray = Instance.new("ParticleEmitter")
 	spray.Color = ColorSequence.new(Color3.fromRGB(200, 230, 255))
 	spray.Size = NumberSequence.new(0.5, 0.1)
@@ -228,29 +377,32 @@ local function buildPlazaDecor(world)
 	spray.Acceleration = Vector3.new(0, -20, 0)
 	spray.EmissionDirection = Enum.NormalId.Right -- the bowl's local X points up
 	spray.Parent = bowl
-	-- benches and lamp posts around the plaza
+	-- benches, planters and lamp posts around the plaza
 	for i = 0, 3 do
 		local a = i * math.pi / 2 + math.pi / 4
-		local pos = Vector3.new(math.cos(a) * 30, 0, math.sin(a) * 30)
-		local cf = CFrame.lookAt(pos, Vector3.zero)
-		part({ Name = "BenchSeat", Size = Vector3.new(6, 0.4, 1.8), CFrame = cf * CFrame.new(0, 1.9, 0), Color = Color3.fromRGB(150, 100, 60), Material = Enum.Material.WoodPlanks, Parent = world })
-		part({ Name = "BenchBack", Size = Vector3.new(6, 1.6, 0.3), CFrame = cf * CFrame.new(0, 3, 0.9) * CFrame.Angles(-0.15, 0, 0), Color = Color3.fromRGB(150, 100, 60), Material = Enum.Material.WoodPlanks, Parent = world })
-		for _, x in ipairs({ -2.6, 2.6 }) do
-			part({ Name = "BenchLeg", Size = Vector3.new(0.3, 1.5, 1.6), CFrame = cf * CFrame.new(x, 1.15, 0), Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal, Parent = world })
+		local pos = Vector3.new(math.cos(a) * 30, 0.4, math.sin(a) * 30)
+		local cf = CFrame.lookAt(pos, Vector3.new(0, 0.4, 0))
+		bench(world, cf)
+		for _, x in ipairs({ -5.2, 5.2 }) do
+			scenery(world, "Planter", Vector3.new(2.4, 1.6, 2.4), cf * CFrame.new(x, 0.8, 0.2), Color3.fromRGB(150, 95, 70), Enum.Material.Brick)
+			bush(world, cf * CFrame.new(x, 1.4, 0.2), 2.2, i + (x > 0 and 1 or 0), PETALS[(i * 2 + (x > 0 and 1 or 0)) % #PETALS + 1])
 		end
-		local lp = Vector3.new(math.cos(a) * 52, 0, math.sin(a) * 52)
-		part({ Name = "LampPost", Shape = Enum.PartType.Cylinder, Size = Vector3.new(10, 0.5, 0.5), CFrame = CFrame.new(lp + Vector3.new(0, 5.4, 0)) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(40, 40, 45), Material = Enum.Material.Metal, Parent = world })
-		local globe = part({ Name = "LampGlobe", Shape = Enum.PartType.Ball, Size = Vector3.new(1.4, 1.4, 1.4), CFrame = CFrame.new(lp + Vector3.new(0, 10.9, 0)), Color = Color3.fromRGB(255, 235, 190), Material = Enum.Material.Neon, Parent = world })
-		local l = Instance.new("PointLight")
-		l.Range = 20
-		l.Brightness = 0.55
-		l.Color = Color3.fromRGB(255, 220, 170)
-		l.Parent = globe
+		lampPost(world, CFrame.new(math.cos(a) * 52, 0.4, math.sin(a) * 52), 10)
+		tree(world, CFrame.new(math.cos(a) * 92, 0, math.sin(a) * 92), 1.2, i * 5 + 2)
+	end
+	-- flower ring around the fountain
+	for i = 0, 7 do
+		local a = i * math.pi / 4 + math.pi / 8
+		flowerBed(world, CFrame.new(math.cos(a) * 11.2, 0.4, 18 + math.sin(a) * 11.2) * CFrame.Angles(0, math.pi / 2 - a, 0), 5, i)
 	end
 	-- low hedges along the plaza edge, with gaps for the paths
 	for _, sd in ipairs({ -1, 1 }) do
 		for _, half in ipairs({ -1, 1 }) do
-			part({ Name = "Hedge", Size = Vector3.new(2.4, 2.4, 44), CFrame = CFrame.new(sd * 59, 1.6, half * 32), Color = Color3.fromRGB(70, 140, 70), Material = Enum.Material.Grass, Parent = world })
+			scenery(world, "Hedge", Vector3.new(2.4, 2.4, 44), CFrame.new(sd * 59, 1.6, half * 32), Color3.fromRGB(70, 140, 70), Enum.Material.Grass)
+			scenery(world, "HedgeTop", Vector3.new(3, 2.2, 46), CFrame.new(sd * 59, 2.7, half * 32), Color3.fromRGB(82, 156, 76), Enum.Material.Grass, { Mesh = "Sphere", CanCollide = false })
+			for _, e in ipairs({ -1, 1 }) do
+				scenery(world, "HedgeBall", Vector3.new(3.6, 3.6, 3.6), CFrame.new(sd * 59, 2.6, half * 32 + e * 22), Color3.fromRGB(66, 134, 66), Enum.Material.Grass, { Shape = Enum.PartType.Ball, CanCollide = false })
+			end
 		end
 	end
 end
@@ -319,7 +471,15 @@ function PlotService.BuildWorld()
 			Color = Color3.fromRGB(40, 40, 60),
 			Parent = world,
 		})
-		part({ Size = Vector3.new(1, 12, 1), Position = Vector3.new(b.x, 0.5 + 0.5, 40), Color = Color3.fromRGB(40, 40, 60), Parent = world })
+		local wood = Color3.fromRGB(120, 82, 55)
+		for _, x in ipairs({ -13.6, 13.6 }) do
+			scenery(world, "BoardPost", Vector3.new(1.2, 24.6, 1.4), CFrame.new(b.x + x, 12.3, 40), wood, Enum.Material.Wood)
+		end
+		scenery(world, "BoardSill", Vector3.new(28.4, 0.8, 1.6), CFrame.new(b.x, 0.8, 40), wood, Enum.Material.Wood)
+		scenery(world, "BoardBeam", Vector3.new(28.4, 0.8, 1.6), CFrame.new(b.x, 23.4, 40), wood, Enum.Material.Wood)
+		for _, sd in ipairs({ -1, 1 }) do
+			scenery(world, "BoardRoof", Vector3.new(16.5, 0.6, 3.4), CFrame.new(b.x + sd * 7.6, 25.6, 40) * CFrame.Angles(0, 0, -sd * 0.26), Color3.fromRGB(150, 60, 55), Enum.Material.Slate, { CanCollide = false })
+		end
 		local sg = Instance.new("SurfaceGui")
 		sg.Face = Enum.NormalId.Front
 		sg.CanvasSize = Vector2.new(520, 440)
@@ -351,8 +511,19 @@ function PlotService.BuildWorld()
 	local sg2 = sg:Clone()
 	sg2.Face = Enum.NormalId.Front
 	sg2.Parent = sign
-	part({ Size = Vector3.new(1, 10, 1), Position = Vector3.new(-15, 4.5, -40), Parent = world })
-	part({ Size = Vector3.new(1, 10, 1), Position = Vector3.new(15, 4.5, -40), Parent = world })
+	for _, x in ipairs({ -21.5, 21.5 }) do
+		scenery(world, "GatePillar", Vector3.new(3, 19.4, 3), CFrame.new(x, 9.7, -40), Color3.fromRGB(170, 85, 65), Enum.Material.Brick)
+		scenery(world, "GateCap", Vector3.new(3.8, 0.6, 3.8), CFrame.new(x, 19.7, -40), Color3.fromRGB(215, 210, 200), Enum.Material.Concrete)
+		local lantern = scenery(world, "GateLantern", Vector3.new(1.8, 1.8, 1.8), CFrame.new(x, 20.9, -40), Color3.fromRGB(255, 235, 190), Enum.Material.Neon, { Shape = Enum.PartType.Ball })
+		local l = Instance.new("PointLight")
+		l.Range = 18
+		l.Brightness = 0.5
+		l.Parent = lantern
+		bush(world, CFrame.new(x, 0.4, -37), 3, x > 0 and 1 or 4, PETALS[x > 0 and 1 or 2])
+	end
+	for _, y in ipairs({ 8.7, 19.3 }) do
+		scenery(world, "SignTrim", Vector3.new(41, 0.6, 1.5), CFrame.new(0, y, -40), Color3.fromRGB(245, 243, 238), Enum.Material.Concrete)
+	end
 
 	-- plots
 	for i, pos in ipairs(PLOT_POSITIONS) do
@@ -372,10 +543,7 @@ function PlotService.BuildWorld()
 		})
 		-- front path + a few trees so the yard doesn't look empty
 		part({ Name = "Walk", Size = Vector3.new(8, 0.2, PLOT_D / 2 + HOUSE_Z0), CFrame = cf * CFrame.new(0, 0.7, (-PLOT_D / 2 + HOUSE_Z0) / 2), Color = Color3.fromRGB(205, 195, 175), Material = Enum.Material.Cobblestone, Parent = model })
-		for _, t in ipairs({ { -45, -55 }, { 45, -50 }, { -62, 10 }, { 63, 30 }, { -62, 58 }, { 62, 70 } }) do
-			part({ Name = "Trunk", Shape = Enum.PartType.Cylinder, Size = Vector3.new(8, 1.6, 1.6), CFrame = cf * CFrame.new(t[1], 4.6, t[2]) * CFrame.Angles(0, 0, math.pi / 2), Color = Color3.fromRGB(110, 75, 45), Material = Enum.Material.Wood, Parent = model })
-			part({ Name = "Leaves", Shape = Enum.PartType.Ball, Size = Vector3.new(9, 9, 9), CFrame = cf * CFrame.new(t[1], 10, t[2]), Color = Color3.fromRGB(80, 160, 70), Material = Enum.Material.Grass, Parent = model })
-		end
+		buildYard(model, cf, i)
 		local house = Instance.new("Folder")
 		house.Name = "House"
 		house.Parent = model
@@ -476,7 +644,12 @@ local function bed(parent, cf, color)
 	piece("BlanketSide", Vector3.new(0.1, 0.55, 4.6), CFrame.new(1.72, 1.35, -1), { Color = color, Material = Enum.Material.Fabric, Parent = parent })
 	piece("BlanketSide", Vector3.new(0.1, 0.55, 4.6), CFrame.new(-1.72, 1.35, -1), { Color = color, Material = Enum.Material.Fabric, Parent = parent })
 	piece("Fold", Vector3.new(3.5, 0.28, 0.6), CFrame.new(0, 1.7, 1.3), { Color = Color3.fromRGB(250, 250, 250), Material = Enum.Material.Fabric, Parent = parent })
-	piece("Pillow", Vector3.new(2.6, 0.5, 1.2), CFrame.new(0, 1.75, 2.6), { Color = Color3.new(1, 1, 1), Material = Enum.Material.Fabric, Parent = parent })
+	piece("Pillow", Vector3.new(2.7, 0.75, 1.35), CFrame.new(0, 1.8, 2.6), { Color = Color3.new(1, 1, 1), Material = Enum.Material.Fabric, Mesh = "Sphere", CanCollide = false, Parent = parent })
+	piece("Quilt", Vector3.new(3.47, 0.22, 0.5), CFrame.new(0, 1.62, -2.4), { Color = color:Lerp(Color3.new(1, 1, 1), 0.35), Material = Enum.Material.Fabric, CanCollide = false, Parent = parent })
+	for _, x in ipairs({ -1.85, 1.85 }) do
+		piece("BedPost", Vector3.new(0.4, 3.5, 0.4), CFrame.new(x, 1.75, 3.55))
+		piece("BedKnob", Vector3.new(0.55, 0.55, 0.55), CFrame.new(x, 3.65, 3.55), { Color = BED_WOOD, Material = Enum.Material.Wood, Shape = Enum.PartType.Ball, CanCollide = false, Parent = parent })
+	end
 end
 
 local SKIN = {
