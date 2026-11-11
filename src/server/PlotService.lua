@@ -1964,7 +1964,7 @@ local function box(parent, x, y, w, h, color, text, textColor)
 	return f
 end
 
-local BOARD_W, BOARD_H = 9, 7.2
+local BOARD_W, BOARD_H = 8.2, 6.56
 local CANVAS = Vector2.new(900, 720)
 
 local CELL_COLORS = {
@@ -2040,7 +2040,7 @@ local function studentsBoard(sg, data)
 			if s then
 				housed[uid] = true
 				local def = Config.StudentById[s.id]
-				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:Lerp(Color3.new(0, 0, 0), 0.35):ToHex(), Config.TagEmoji(def), string.match(def.name, "%S+$") or def.name))
+				table.insert(names, string.format('<font color="#%s">%s %s</font>', Config.Rarities[def.rarity].color:Lerp(Color3.new(0, 0, 0), 0.35):ToHex(), Config.TagEmoji(def), Config.ShortName(def)))
 			end
 		end
 		table.insert(lines, string.format("<b>Room %d</b> (%d/%d)  %s", i, #room.occupants, Config.Beds(room), #names > 0 and table.concat(names, ", ") or "empty"))
@@ -2088,10 +2088,42 @@ local function satisfactionBoard(sg, data, totals)
 	box(sg, 0, 670, 900, 44, nil, #list > 0 and "Unhappiest rooms first. Press E for the details." or "Move students into rooms to see how they feel.", Color3.fromRGB(110, 100, 100))
 end
 
+-- what happened between students lately, and how many things need fixing
+local AUDIT_INK = { good = Color3.fromRGB(40, 120, 60), bad = Color3.fromRGB(170, 50, 50), info = INK }
+
+local function auditBoard(sg, data)
+	local trouble = 0
+	for _, c in ipairs(SchoolMath.auditChecks(data)) do
+		if c.sev == "bug" or c.sev == "bad" or c.sev == "warn" then
+			trouble += 1
+		end
+	end
+	box(sg, 0, 0, 900, 80, nil, "🔍 AUDIT")
+	box(sg, 20, 86, 860, 50, trouble > 0 and Color3.fromRGB(255, 200, 190) or Color3.fromRGB(200, 235, 200), trouble > 0 and string.format("⚠ %d thing%s to fix between students", trouble, trouble == 1 and "" or "s") or "✅ No problems between students")
+	local log = data.audit or {}
+	local row = 0
+	for i = #log, 1, -1 do
+		if row >= 9 then
+			break
+		end
+		if SchoolMath.AuditGroups[log[i].k] ~= "routine" then
+			local line = SchoolMath.auditLine(log[i])
+			local l = box(sg, 24, 148 + row * 56, 852, 48, nil, line.text, AUDIT_INK[line.tone] or INK)
+			l.TextXAlignment = Enum.TextXAlignment.Left
+			row += 1
+		end
+	end
+	if row == 0 then
+		box(sg, 24, 300, 852, 60, nil, "Nothing has happened yet.", Color3.fromRGB(110, 100, 100))
+	end
+	box(sg, 0, 670, 900, 44, nil, "Newest first. Press E for who, what and why.", Color3.fromRGB(110, 100, 100))
+end
+
 local BOARDS = {
-	{ id = "layout", title = "Floor plans", action = "🏗 Change layout", v = -10.5, draw = layoutBoard },
-	{ id = "rooms", title = "Students", action = "👥 Move students", v = 0, draw = studentsBoard },
-	{ id = "satisfaction", title = "Happiness", action = "😊 Check happiness", v = 10.5, draw = satisfactionBoard },
+	{ id = "layout", title = "Floor plans", action = "🏗 Change layout", v = -13.2, draw = layoutBoard },
+	{ id = "rooms", title = "Students", action = "👥 Move students", v = -4.4, draw = studentsBoard },
+	{ id = "satisfaction", title = "Happiness", action = "😊 Check happiness", v = 4.4, draw = satisfactionBoard },
+	{ id = "audit", title = "Audit", action = "🔍 Open the audit", v = 13.2, draw = auditBoard },
 }
 
 local function buildBoards(plot, parent, info, data, totals)
@@ -2212,7 +2244,7 @@ local function photoFrame(parent, cf, photo, data)
 	local names = {}
 	for _, uid in ipairs(members) do
 		local def = Config.StudentById[data.students[uid].id]
-		table.insert(names, string.match(def.name, "%S+$") or def.name)
+		table.insert(names, Config.ShortName(def))
 	end
 	local cap = label(paper, string.format("%s %s %s", activity and activity.emoji or "📷", activity and activity.name or "Outing", outcome.emoji), Color3.fromRGB(50, 40, 40), UDim2.new(1, -8, 0.13, 0), UDim2.new(0, 4, 0.76, 0))
 	cap.TextStrokeTransparency = 1

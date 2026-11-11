@@ -147,27 +147,27 @@ Config.Students = {
 	{ id = "daisy", name = "Duchess Daisy", rarity = "Rare", gender = "F", look = "Royal", tags = { "RichKid", "Charismatic" } },
 	{ id = "chloe", name = "Choir Chloe", rarity = "Rare", gender = "F", look = "Musician", tags = { "Musician", "Charismatic" }, trait = { kind = "Mood", value = 6, text = "+6 mood to roommates" } },
 	-- Epic
-	{ id = "junior", name = "Prof. Junior", rarity = "Epic", gender = "M", look = "Nerd", tags = { "Nerd", "Normal" }, trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
+	{ id = "junior", name = "Prof. Junior", short = "Junior", rarity = "Epic", gender = "M", look = "Nerd", tags = { "Nerd", "Normal" }, trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
 	{ id = "ollie", name = "Olympic Ollie", rarity = "Epic", gender = "M", look = "Jock", tags = { "Jock", "Chad" }, trait = { kind = "Mood", value = 12, text = "+12 mood to roommates" } },
 	{ id = "penny", name = "Pop Star Penny", rarity = "Epic", gender = "F", look = "Musician", tags = { "Musician", "Charismatic" }, trait = { kind = "Social", value = 10, text = "+10 mood per roommate" } },
 	{ id = "hex", name = "Hacker Hex", rarity = "Epic", gender = "F", look = "Gamer", tags = { "Gamer", "Chud" }, trait = { kind = "Gold", value = 1.5, text = "Room income x1.5" } },
 	{ id = "kai", name = "Chaos Kai", rarity = "Epic", gender = "M", look = "Prankster", tags = { "Funny", "Bully" }, trait = { kind = "Mood", value = 10, text = "+10 mood to roommates" } },
 	{ id = "bella", name = "Bossy Bella", rarity = "Epic", gender = "F", look = "Royal", tags = { "Alpha", "RichKid" }, trait = { kind = "Gold", value = 1.4, text = "Room income x1.4" } },
 	-- Legendary
-	{ id = "heir", name = "Headmaster's Heir", rarity = "Legendary", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Charismatic" }, trait = { kind = "Mood", value = 20, text = "+20 mood to roommates" } },
-	{ id = "prodigy", name = "Prodigy Pixel", rarity = "Legendary", gender = "F", look = "Gamer", tags = { "Gamer", "Nerd", "Sleepy" }, trait = { kind = "Gold", value = 2, text = "Room income x2" } },
+	{ id = "heir", name = "Headmaster's Heir", short = "Heir", rarity = "Legendary", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Charismatic" }, trait = { kind = "Mood", value = 20, text = "+20 mood to roommates" } },
+	{ id = "prodigy", name = "Prodigy Pixel", short = "Pixel", rarity = "Legendary", gender = "F", look = "Gamer", tags = { "Gamer", "Nerd", "Sleepy" }, trait = { kind = "Gold", value = 2, text = "Room income x2" } },
 	{ id = "remy", name = "Rockstar Remy", rarity = "Legendary", gender = "M", look = "Musician", tags = { "Musician", "Chad", "Charismatic" }, trait = { kind = "Social", value = 15, text = "+15 mood per roommate" } },
-	{ id = "ghost", name = "Ghost of Room 13", rarity = "Legendary", gender = "M", look = "Rebel", tags = { "Indie", "Sleepy", "Carefree" }, trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
+	{ id = "ghost", name = "Ghost of Room 13", short = "Ghost", rarity = "Legendary", gender = "M", look = "Rebel", tags = { "Indie", "Sleepy", "Carefree" }, trait = { kind = "Peace", value = 1, text = "Roommates never fight" } },
 	{ id = "ivy", name = "Influencer Ivy", rarity = "Legendary", gender = "F", look = "Royal", acc = { "shades" }, tags = { "Charismatic", "RichKid", "Funny" }, trait = { kind = "Social", value = 12, text = "+12 mood per roommate" } },
 	-- La Rose crew (Legendary, rarer inside the pool)
-	{ id = "khan", name = "Khan D", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Gamer", acc = { "glasses", "headset" }, shirt = Color3.fromRGB(60, 60, 75), hair = Color3.fromRGB(20, 20, 22), skin = Color3.fromRGB(234, 200, 160), tags = { "LaRose", "Nerd", "Gamer" }, trait = { kind = "Gold", value = 2, needs = "console", text = "Room income x2 with a console in the living room" } },
+	{ id = "khan", name = "Khan D", short = "Khan D", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Gamer", acc = { "glasses", "headset" }, shirt = Color3.fromRGB(60, 60, 75), hair = Color3.fromRGB(20, 20, 22), skin = Color3.fromRGB(234, 200, 160), tags = { "LaRose", "Nerd", "Gamer" }, trait = { kind = "Gold", value = 2, needs = "console", text = "Room income x2 with a console in the living room" } },
 	{ id = "jp", name = "JP", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Musician", acc = { "guitar", "wavy" }, shirt = Color3.fromRGB(235, 235, 230), hair = Color3.fromRGB(45, 30, 20), skin = Color3.fromRGB(196, 140, 100), tags = { "LaRose", "Musician", "Charismatic" }, trait = { kind = "Mood", value = 20, text = "+20 mood to roommates" } },
 	{ id = "ed", name = "Ed", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Musician", acc = { "headphones", "curly" }, shirt = Color3.fromRGB(25, 25, 30), hair = Color3.fromRGB(40, 28, 20), skin = Color3.fromRGB(190, 135, 95), tags = { "LaRose", "Indie", "Musician" }, trait = { kind = "Chill", value = 1, text = "Never has a bad vibe with anyone" } },
 	{ id = "greg", name = "Greg", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Jock", acc = { "shades", "bighair" }, shirt = Color3.fromRGB(30, 60, 140), hair = Color3.fromRGB(90, 60, 35), skin = Color3.fromRGB(240, 205, 175), tags = { "LaRose", "Funny", "Charismatic", "Chad" }, trait = { kind = "Floor", value = 5, text = "+5 mood to everyone on his floor" } },
 	{ id = "miguel", name = "Miguel", rarity = "Legendary", weight = 0.5, crew = "LaRose", gender = "M", look = "Rebel", acc = { "greenaura" }, shirt = Color3.fromRGB(40, 70, 40), hair = Color3.fromRGB(60, 230, 90), skin = Color3.fromRGB(240, 210, 185), tags = { "LaRose", "Chud" }, trait = { kind = "Rivals", value = 0.1, text = "+10% income per rival in the house" } },
 	-- Mythic
 	{ id = "tess", name = "Time Traveler Tess", rarity = "Mythic", gender = "F", look = "Nerd", tags = { "Nerd", "Carefree", "Charismatic" }, trait = { kind = "Gold", value = 3, text = "Room income x3" } },
-	{ id = "dragon", name = "Dragon Exchange Student", rarity = "Mythic", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Chad" }, trait = { kind = "Mood", value = 30, text = "+30 mood to roommates" } },
+	{ id = "dragon", name = "Dragon Exchange Student", short = "Dragon", rarity = "Mythic", gender = "M", look = "Royal", tags = { "RichKid", "Alpha", "Chad" }, trait = { kind = "Mood", value = 30, text = "+30 mood to roommates" } },
 	-- Event students: only on the Applicants board while their event is on
 	{ id = "vee", name = "Valedictorian Vee", rarity = "Legendary", event = "exam", gender = "F", look = "Nerd", acc = { "glasses" }, tags = { "Nerd", "Charismatic" }, trait = { kind = "Gold", value = 1.6, text = "Room income x1.6" } },
 	{ id = "preston", name = "Prom King Preston", rarity = "Legendary", event = "prom", gender = "M", look = "Royal", acc = { "crown" }, tags = { "Chad", "RichKid" }, trait = { kind = "Mood", value = 15, text = "+15 mood to roommates" } },
@@ -241,6 +241,17 @@ function Config.BondKey(a, b)
 	end
 	return b .. "|" .. a
 end
+
+-- "Tim" for "Quiet Tim": the short name used in notices and on boards
+function Config.ShortName(def)
+	return def.short or string.match(def.name, "%S+$") or def.name
+end
+
+-- Audit log (🔍 Audit): what happened between students and why. Routine
+-- entries (the roommate tick every Config.BondTick) are capped separately so
+-- they never push the interesting ones out.
+Config.AuditKeep = 150
+Config.AuditRoutineKeep = 30
 
 -- Outings: a group of students who get along goes out, comes back with a
 -- photo for their walls. Preferred tags make an activity likelier and better.
